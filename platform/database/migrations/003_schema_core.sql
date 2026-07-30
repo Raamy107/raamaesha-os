@@ -4,25 +4,15 @@
 -- Module    : Platform Core
 --
 -- Purpose:
---   Creates the core platform schema and the organizations table.
+--   Creates the core platform tables.
 --
 -- Responsibilities:
---   - Create application schema
 --   - Create organizations table
 --
 -- PostgreSQL : 17+
 -- =============================================================================
 
 BEGIN;
-
--- =============================================================================
--- Create Application Schema
--- =============================================================================
-
-CREATE SCHEMA IF NOT EXISTS raamaesha;
-
-COMMENT ON SCHEMA raamaesha IS
-'Core schema for the RaamaEsha OS platform.';
 
 -- =============================================================================
 -- Organizations
@@ -84,7 +74,9 @@ CREATE TABLE raamaesha.organizations
 
     CONSTRAINT ck_organizations_currency_code
         CHECK (currency_code = UPPER(currency_code))
-);-- =============================================================================
+);
+
+-- =============================================================================
 -- Additional Constraints
 -- =============================================================================
 
@@ -162,6 +154,7 @@ CREATE INDEX idx_organizations_status_code
 
 CREATE INDEX idx_organizations_deleted_at
     ON raamaesha.organizations (deleted_at);
+
 -- =============================================================================
 -- Migration Complete
 -- =============================================================================

@@ -31,4 +31,14 @@ CREATE EXTENSION IF NOT EXISTS citext;
 COMMENT ON EXTENSION citext IS
 'Provides the case-insensitive CITEXT data type.';
 
+-- =============================================================================
+-- Schema: raamaesha
+-- Purpose : Primary application schema
+-- =============================================================================
+
+CREATE SCHEMA IF NOT EXISTS raamaesha;
+
+COMMENT ON SCHEMA raamaesha IS
+'Primary schema for the RaamaEsha OS platform.';
+
 COMMIT;

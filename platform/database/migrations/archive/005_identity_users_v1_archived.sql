@@ -53,3 +53,4 @@ CREATE TABLE raamaesha.users
 
     timezone            TEXT
         DEFAULT 'UTC',
+    

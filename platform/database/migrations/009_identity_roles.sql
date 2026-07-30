@@ -1,34 +1,26 @@
--- ============================================================
--- RaamaEsha OS Founder Edition v1.0
--- Sprint 005 : Identity Platform V2
+-- =============================================================================
+-- RaamaEsha OS Founder Edition
 -- Migration : 009_identity_roles.sql
--- Author : RaamaEsha Engineering
--- ============================================================
+-- Module    : Identity Platform
+--
+-- Purpose:
+--   Creates the universal roles model.
+--
+-- Responsibilities:
+--   - Role scopes
+--   - Platform roles
+--   - Organization roles
+--   - Branch roles
+--   - Team roles
+--
+-- PostgreSQL : 17+
+-- =============================================================================
 
 BEGIN;
 
--- ============================================================
--- Purpose
--- ============================================================
-
--- Creates the universal Roles model.
---
--- Every Actor can have one or more Roles.
---
--- Examples:
---
--- Human ------> Founder
--- Human ------> Doctor
--- Human ------> HR Manager
--- AI Agent ---> Receptionist
--- AI Agent ---> Sales Assistant
--- Branch -----> Warehouse
---
--- Permissions will be assigned to Roles,
--- not directly to Actors.
--- ============================================================
--- Role Types
--- ============================================================
+-- =============================================================================
+-- ENUM : role_scope
+-- =============================================================================
 
 CREATE TYPE public.role_scope AS ENUM
 (
@@ -39,41 +31,65 @@ CREATE TYPE public.role_scope AS ENUM
     'project'
 );
 
--- ==============================================================
+COMMENT ON TYPE public.role_scope IS
+'Defines the scope at which a role is applicable within the platform.';
+
+-- =============================================================================
 -- Roles
--- ==============================================================
+-- =============================================================================
 
 CREATE TABLE raamaesha.roles
-(    id              UUID
-                    PRIMARY KEY
-                    DEFAULT gen_random_uuid(),
+(
+    id                      UUID
+        NOT NULL
+        DEFAULT gen_random_uuid(),
 
- code            TEXT
-                 NOT NULL,
-                        
- display_name    TEXT
-                 NOT NULL,
- description     TEXT,
- scope           public.role_scope
-                 NOT NULL,
- is_system BOOLEAN NOT NULL DEFAULT FALSE,
- is_active BOOLEAN NOT NULL DEFAULT TRUE,
- 
+    code                    TEXT
+        NOT NULL,
 
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            created_by      UUID,
-                updated_by      UUID
-                );
--- ==============================================
--- Constraints
--- ============================================================
-ALTER TABLE raamaesha.roles
-    ADD CONSTRAINT uq_roles_code_scope
-    UNIQUE (code, scope);
-    -- ============================================================
+    display_name            TEXT
+        NOT NULL,
+
+    description             TEXT,
+
+    scope                   public.role_scope
+        NOT NULL,
+
+    is_system               BOOLEAN
+        NOT NULL
+        DEFAULT FALSE,
+
+    is_active               BOOLEAN
+        NOT NULL
+        DEFAULT TRUE,
+
+    created_at              TIMESTAMPTZ
+        NOT NULL
+        DEFAULT CURRENT_TIMESTAMP,
+
+    updated_at              TIMESTAMPTZ
+        NOT NULL
+        DEFAULT CURRENT_TIMESTAMP,
+
+    created_by              UUID,
+
+    updated_by              UUID,
+
+    deleted_at              TIMESTAMPTZ,
+
+    CONSTRAINT pk_roles
+        PRIMARY KEY (id),
+
+    CONSTRAINT uq_roles_code_scope
+        UNIQUE (code, scope),
+
+    CONSTRAINT ck_roles_display_name_not_blank
+        CHECK (length(trim(display_name)) > 0)
+);
+
+-- =============================================================================
 -- Foreign Keys
--- ============================================================
+-- =============================================================================
 
 ALTER TABLE raamaesha.roles
     ADD CONSTRAINT fk_roles_created_by_actor
@@ -86,49 +102,68 @@ ALTER TABLE raamaesha.roles
         FOREIGN KEY (updated_by)
         REFERENCES raamaesha.actors (id)
         ON DELETE SET NULL;
-        -- ==========================================================
--- Indexes
--- ==========================================================
+
+-- =============================================================================
+-- Table Documentation
+-- =============================================================================
+
+COMMENT ON TABLE raamaesha.roles IS
+'Stores platform and organization roles used for authorization.';
+
+COMMENT ON COLUMN raamaesha.roles.id IS
+'Globally unique identifier for the role.';
+
+COMMENT ON COLUMN raamaesha.roles.code IS
+'Unique role code within its scope.';
+
+COMMENT ON COLUMN raamaesha.roles.display_name IS
+'Human-readable role name.';
+
+COMMENT ON COLUMN raamaesha.roles.description IS
+'Optional description of the role.';
+
+COMMENT ON COLUMN raamaesha.roles.scope IS
+'Defines the scope where the role is applicable.';
+
+COMMENT ON COLUMN raamaesha.roles.is_system IS
+'Indicates whether this is a protected system-defined role.';
+
+COMMENT ON COLUMN raamaesha.roles.is_active IS
+'Indicates whether the role is currently active.';
+
+COMMENT ON COLUMN raamaesha.roles.created_at IS
+'Timestamp when the role was created.';
+
+COMMENT ON COLUMN raamaesha.roles.updated_at IS
+'Timestamp when the role was last updated.';
+
+COMMENT ON COLUMN raamaesha.roles.created_by IS
+'Actor that created the role.';
+
+COMMENT ON COLUMN raamaesha.roles.updated_by IS
+'Actor that last updated the role.';
+
+COMMENT ON COLUMN raamaesha.roles.deleted_at IS
+'Soft deletion timestamp. NULL indicates an active role.';
+
+-- =============================================================================
+-- Secondary Indexes
+-- =============================================================================
+
 CREATE INDEX idx_roles_scope
-ON raamaesha.roles (scope);
+    ON raamaesha.roles (scope);
 
 CREATE INDEX idx_roles_active
-ON raamaesha.roles (is_active);
+    ON raamaesha.roles (is_active);
 
 CREATE INDEX idx_roles_system
-ON raamaesha.roles (is_system);
--- ==========================================================
--- Comments
--- ==========================================================
-COMMENT ON TABLE raamaesha.roles
-IS 'Stores platform and tenant roles.';
+    ON raamaesha.roles (is_system);
 
-COMMENT ON COLUMN raamaesha.roles.code
-IS 'Unique role code within its scope.';
+CREATE INDEX idx_roles_deleted_at
+    ON raamaesha.roles (deleted_at);
 
-COMMENT ON COLUMN raamaesha.roles.display_name
-IS 'Human-readable role name.';
+-- =============================================================================
+-- Migration Complete
+-- =============================================================================
 
-COMMENT ON COLUMN raamaesha.roles.description
-IS 'Optional description of the role.';
-
-COMMENT ON COLUMN raamaesha.roles.scope
-IS 'Defines whether the role belongs to the platform or a tenant.';
-
-COMMENT ON COLUMN raamaesha.roles.is_system
-IS 'Indicates whether the role is a protected system role.';
-
-COMMENT ON COLUMN raamaesha.roles.is_active
-IS 'Determines whether the role is currently active.';
-COMMENT ON COLUMN raamaesha.roles.created_at
-IS 'Timestamp when the role was created.';
-
-COMMENT ON COLUMN raamaesha.roles.updated_at
-IS 'Timestamp when the role was last updated.';
-
-COMMENT ON COLUMN raamaesha.roles.created_by
-IS 'Actor who created the role.';
-
-COMMENT ON COLUMN raamaesha.roles.updated_by
-IS 'Actor who last updated the role.';
 COMMIT;

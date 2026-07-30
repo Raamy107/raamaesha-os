@@ -1,26 +1,23 @@
--- ============================================================
+-- =============================================================================
 -- RaamaEsha OS Founder Edition
--- Sprint 005 : Identity Platform V2
 -- Migration : 008_actor_relationships.sql
+-- Module    : Identity Platform
 --
--- Purpose
--- -------
--- Universal relationships between Actors.
+-- Purpose:
+--   Creates universal relationships between actors.
 --
--- Everything in the platform connects through Actors.
+-- Responsibilities:
+--   - Relationship types
+--   - Actor-to-actor relationships
 --
--- Human -> Organization
--- Human -> Team
--- Branch -> Organization
--- AI Agent -> Team
--- Device -> Branch
--- External System -> Organization
--- ============================================================
+-- PostgreSQL : 17+
+-- =============================================================================
 
 BEGIN;
--- ============================================================
--- Relationship Types
--- ============================================================
+
+-- =============================================================================
+-- ENUM : actor_relationship_type
+-- =============================================================================
 
 CREATE TYPE public.actor_relationship_type AS ENUM
 (
@@ -34,100 +31,149 @@ CREATE TYPE public.actor_relationship_type AS ENUM
     'controls',
     'connected_to'
 );
--- ============================================================
+
+COMMENT ON TYPE public.actor_relationship_type IS
+'Defines supported relationship types between actors.';
+
+-- =============================================================================
 -- Actor Relationships
--- ============================================================
+-- =============================================================================
 
 CREATE TABLE raamaesha.actor_relationships
 (
-    id                          UUID PRIMARY KEY
-                                DEFAULT gen_random_uuid(),
+    id                          UUID
+        NOT NULL
+        DEFAULT gen_random_uuid(),
 
     from_actor_id               UUID
-                                NOT NULL
-                                REFERENCES raamaesha.actors(id),
+        NOT NULL,
 
     relationship_type           public.actor_relationship_type
-                                NOT NULL,
+        NOT NULL,
 
     to_actor_id                 UUID
-                                NOT NULL
-                                REFERENCES raamaesha.actors(id),
+        NOT NULL,
 
     is_active                   BOOLEAN
-                                NOT NULL
-                                DEFAULT TRUE,
+        NOT NULL
+        DEFAULT TRUE,
 
     valid_from                  TIMESTAMPTZ
-                                NOT NULL
-                                DEFAULT now(),
+        NOT NULL
+        DEFAULT CURRENT_TIMESTAMP,
 
     valid_to                    TIMESTAMPTZ,
 
     created_at                  TIMESTAMPTZ
-                                NOT NULL
-                                DEFAULT now(),
+        NOT NULL
+        DEFAULT CURRENT_TIMESTAMP,
 
     updated_at                  TIMESTAMPTZ
-                                NOT NULL
-                                DEFAULT now(),
+        NOT NULL
+        DEFAULT CURRENT_TIMESTAMP,
 
-    CHECK (from_actor_id <> to_actor_id)
+    created_by                  UUID,
+
+    updated_by                  UUID,
+
+    deleted_at                  TIMESTAMPTZ,
+
+    CONSTRAINT pk_actor_relationships
+        PRIMARY KEY (id),
+
+    CONSTRAINT fk_actor_relationships_from_actor
+        FOREIGN KEY (from_actor_id)
+        REFERENCES raamaesha.actors(id)
+        ON DELETE CASCADE,
+
+    CONSTRAINT fk_actor_relationships_to_actor
+        FOREIGN KEY (to_actor_id)
+        REFERENCES raamaesha.actors(id)
+        ON DELETE CASCADE,
+
+    CONSTRAINT ck_actor_relationships_not_self
+        CHECK (from_actor_id <> to_actor_id),
+
+    CONSTRAINT uq_actor_relationships
+        UNIQUE
+        (
+            from_actor_id,
+            to_actor_id,
+            relationship_type,
+            valid_from
+        )
 );
 
--- ============================================================
--- Foreign Keys
--- ============================================================
-
-ALTER TABLE raamaesha.actor_relationships
-ADD CONSTRAINT fk_actor_relationships_from_actor
-FOREIGN KEY (from_actor_id)
-REFERENCES raamaesha.actors(id)
-ON DELETE CASCADE;
-
-ALTER TABLE raamaesha.actor_relationships
-ADD CONSTRAINT fk_actor_relationships_to_actor
-FOREIGN KEY (to_actor_id)
-REFERENCES raamaesha.actors(id)
-ON DELETE CASCADE;
--- ============================================================
--- Indexes
--- ============================================================
-
-CREATE INDEX idx_actor_relationships_from_actor
-ON raamaesha.actor_relationships(from_actor_id);
-
-CREATE INDEX idx_actor_relationships_to_actor
-ON raamaesha.actor_relationships(to_actor_id);
-
-CREATE INDEX idx_actor_relationships_type
-ON raamaesha.actor_relationships(relationship_type);
-
-CREATE INDEX idx_actor_relationships_active
-ON raamaesha.actor_relationships(is_active);
-
-CREATE INDEX idx_actor_relationships_valid_from
-
--- ============================================================
--- Unique Constraints
--- ============================================================
-
-ALTER TABLE raamaesha.actor_relationships
-ADD CONSTRAINT uq_actor_relationships
-UNIQUE
-(
-    from_actor_id,
-    to_actor_id,
-    relationship_type,
-    valid_from
-);
--- ============================================================
--- Comments
--- ============================================================
+-- =============================================================================
+-- Table Documentation
+-- =============================================================================
 
 COMMENT ON TABLE raamaesha.actor_relationships IS
-'Stores relationships between all actors in the platform.';
+'Stores relationships between actors in the RaamaEsha identity platform.';
+
+COMMENT ON COLUMN raamaesha.actor_relationships.id IS
+'Globally unique identifier for the relationship.';
+
+COMMENT ON COLUMN raamaesha.actor_relationships.from_actor_id IS
+'Source actor in the relationship.';
 
 COMMENT ON COLUMN raamaesha.actor_relationships.relationship_type IS
-'Defines how two actors are connected.';
+'Defines how two actors are related.';
+
+COMMENT ON COLUMN raamaesha.actor_relationships.to_actor_id IS
+'Target actor in the relationship.';
+
+COMMENT ON COLUMN raamaesha.actor_relationships.is_active IS
+'Indicates whether the relationship is currently active.';
+
+COMMENT ON COLUMN raamaesha.actor_relationships.valid_from IS
+'Timestamp from which the relationship is valid.';
+
+COMMENT ON COLUMN raamaesha.actor_relationships.valid_to IS
+'Timestamp until which the relationship remains valid.';
+
+COMMENT ON COLUMN raamaesha.actor_relationships.created_at IS
+'Timestamp when the relationship was created.';
+
+COMMENT ON COLUMN raamaesha.actor_relationships.updated_at IS
+'Timestamp when the relationship was last updated.';
+
+COMMENT ON COLUMN raamaesha.actor_relationships.created_by IS
+'Actor that created this relationship.';
+
+COMMENT ON COLUMN raamaesha.actor_relationships.updated_by IS
+'Actor that last updated this relationship.';
+
+COMMENT ON COLUMN raamaesha.actor_relationships.deleted_at IS
+'Soft deletion timestamp. NULL indicates an active relationship.';
+
+-- =============================================================================
+-- Secondary Indexes
+-- =============================================================================
+
+CREATE INDEX idx_actor_relationships_from_actor
+    ON raamaesha.actor_relationships (from_actor_id);
+
+CREATE INDEX idx_actor_relationships_to_actor
+    ON raamaesha.actor_relationships (to_actor_id);
+
+CREATE INDEX idx_actor_relationships_type
+    ON raamaesha.actor_relationships (relationship_type);
+
+CREATE INDEX idx_actor_relationships_active
+    ON raamaesha.actor_relationships (is_active);
+
+CREATE INDEX idx_actor_relationships_valid_from
+    ON raamaesha.actor_relationships (valid_from);
+
+CREATE INDEX idx_actor_relationships_valid_to
+    ON raamaesha.actor_relationships (valid_to);
+
+CREATE INDEX idx_actor_relationships_deleted_at
+    ON raamaesha.actor_relationships (deleted_at);
+
+-- =============================================================================
+-- Migration Complete
+-- =============================================================================
+
 COMMIT;

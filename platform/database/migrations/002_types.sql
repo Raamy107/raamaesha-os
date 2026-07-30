@@ -16,6 +16,10 @@
 
 BEGIN;
 
--- No shared platform types are required at this stage.
+-- =============================================================================
+-- This migration is intentionally empty.
+-- Shared platform ENUMs will be introduced here only when they are reused
+-- across multiple modules.
+-- =============================================================================
 
 COMMIT;
