@@ -299,11 +299,6 @@ ON raamaesha.branches
 -- Secondary Indexes
 -- =============================================================================
 
-CREATE INDEX idx_branches_organization_id
-ON raamaesha.branches
-(
-    organization_id
-);
 
 
 CREATE INDEX idx_branches_city_id
