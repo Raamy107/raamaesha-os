@@ -1,0 +1,115 @@
+# ADR-008
+
+# Capability Registry
+
+Status: Accepted
+
+Date: 2026
+
+---
+
+# Context
+
+RaamaEsha OS is designed as an AI-Native Business Operating System composed of reusable platform capabilities.
+
+The platform must provide a central mechanism through which capabilities can be identified, versioned, discovered, governed, and exposed consistently across business applications, APIs, events, tools, workflows, and AI runtime services.
+
+Integration operations and operation contracts describe capabilities provided by individual organization-owned integrations. They do not provide a complete platform-wide registry of capabilities.
+
+Nandi AI and future Tool Gateway components require a reliable discovery layer without embedding provider-specific or application-specific capability definitions directly into runtime logic.
+
+The architecture therefore requires a central Capability Registry as a platform-level source of capability metadata.
+
+---
+
+# Decision
+
+RaamaEsha OS adopts a centralized Capability Registry as a Platform Core capability.
+
+The Capability Registry is responsible for maintaining the canonical metadata required to identify and discover platform capabilities.
+
+A capability may represent a reusable platform service, API, event capability, tool capability, or other governed platform capability.
+
+The registry will support, as appropriate:
+
+- Capability identity
+- Stable capability code
+- Human-readable name
+- Version information
+- Capability category
+- Lifecycle status
+- API references
+- Event references
+- Permission references
+- Health status
+- Extensible non-secret metadata
+
+The Capability Registry is a discovery and governance layer.
+
+It does not execute capabilities.
+
+It does not contain provider-specific business logic.
+
+It does not store plaintext secrets.
+
+It does not replace the Integration Operation Registry.
+
+Integration operations remain responsible for describing operations supported by organization-owned integrations.
+
+Operation contracts remain responsible for defining machine-readable input, output, execution metadata, and runtime hints for those operations.
+
+The Capability Registry may reference or expose capabilities from these platform subsystems through governed relationships established by future migrations.
+
+Nandi AI and future Tool Gateway components may consume the Capability Registry for capability discovery, routing, authorization evaluation, and orchestration.
+
+Actual execution remains the responsibility of the appropriate runtime layer.
+
+---
+
+# Consequences
+
+Benefits include:
+
+- Centralized capability discovery
+- Consistent platform-wide capability identity
+- Better integration with Nandi AI
+- Future Tool Gateway compatibility
+- Reusable capability metadata
+- Clear separation between discovery and execution
+- Improved platform governance
+- Easier capability version management
+- Reduced coupling between business applications and runtime implementations
+- Foundation for future developer SDK and public API capabilities
+
+Trade-offs:
+
+- Additional platform metadata and governance complexity
+- Capability lifecycle management must be maintained carefully
+- Future subsystems must integrate with the registry consistently
+- Versioning and compatibility rules require disciplined governance
+
+---
+
+# Alternatives Considered
+
+## Application-Specific Capability Registries
+
+Rejected because capability discovery would become fragmented across business applications and would prevent consistent platform-wide discovery.
+
+## Integration Operations as the Global Capability Registry
+
+Rejected because integration operations represent organization-owned integration capabilities and are not equivalent to the complete set of RaamaEsha OS platform capabilities.
+
+## Runtime-Only Capability Discovery
+
+Rejected because relying exclusively on runtime implementations would make discovery inconsistent, reduce governance, and tightly couple Nandi AI and future Tool Gateway components to implementation details.
+
+## Static Configuration Files
+
+Rejected because a persistent, queryable, auditable registry is required for a multi-tenant enterprise platform with evolving capabilities.
+
+---
+
+# Decision Owner
+
+RaamaEsha Architecture Team
