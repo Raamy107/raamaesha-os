@@ -161,7 +161,7 @@ ALTER TABLE raamaesha.capability_operation_bindings
 -- references to participate in logical uniqueness.
 -- =============================================================================
 
-DROP INDEX ux_capability_operation_bindings_one_active;
+DROP INDEX IF EXISTS raamaesha.ux_capability_operation_bindings_one_active;
 
 
 CREATE UNIQUE INDEX ux_capability_operation_bindings_relationship
