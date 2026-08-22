@@ -4,21 +4,20 @@
 -- Module    : Integration Operation Integrity
 --
 -- Purpose:
---   Harden lifecycle and relational integrity of integration operations
---   created by Migration 020.
+--   Harden lifecycle integrity of integration operations created by
+--   Migration 020.
 --
 -- Responsibilities:
 --   - Preserve integration ownership
---   - Prevent invalid soft-deleted operation states
+--   - Prevent active operations from being soft deleted
 --   - Preserve operation history
---   - Enforce valid operation codes and names
---   - Enforce JSONB object integrity
 --   - Preserve forward-only migration discipline
 --
 -- Design Principles:
 --   - Correct historical schema through a forward-only migration
---   - Database-enforced integrity
+--   - Database-enforced lifecycle integrity
 --   - Soft deletion remains available for historical records
+--   - Active operations must remain discoverable
 --   - No execution logic
 --   - No workflow execution
 --   - No worker scheduling
@@ -42,22 +41,23 @@ BEGIN;
 -- Prevent Active Operations From Being Soft Deleted
 -- =============================================================================
 --
--- An active operation must remain available for runtime discovery.
+-- Migration 020 models operation lifecycle using:
 --
--- Therefore:
+--     is_active
+--     deleted_at
 --
---     status = 'active'
+-- Therefore the invalid state is:
+--
+--     is_active = TRUE
 --     deleted_at IS NOT NULL
 --
--- is an invalid state.
---
--- Historical non-active operations may still be soft deleted.
+-- Historical inactive operations may still be soft deleted.
 -- =============================================================================
 
 ALTER TABLE raamaesha.integration_operations
     ADD CONSTRAINT ck_integration_operations_active_not_deleted
         CHECK (
-            status <> 'active'
+            is_active = FALSE
             OR deleted_at IS NULL
         );
 
