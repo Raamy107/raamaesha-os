@@ -53,9 +53,7 @@ BEGIN;
 -- PRIMARY KEY constraint.
 -- =============================================================================
 
-ALTER TABLE raamaesha.roles
-    ADD CONSTRAINT uq_roles_id_scope
-        UNIQUE (id, scope);
+-- Composite role key (id, scope) is already established for role-scope integrity.
 
 
 -- =============================================================================
@@ -301,3 +299,4 @@ COMMIT;
 -- =============================================================================
 -- End Migration 036
 -- =============================================================================
+
