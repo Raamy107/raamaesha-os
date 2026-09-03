@@ -91,4 +91,3 @@ CREATE INDEX idx_event_deliveries_created_at
     ON raamaesha.event_deliveries (created_at);
 
 COMMIT;
-'@ | Set-Content .\platform\database\migrations\047_event_deliveries.sql
