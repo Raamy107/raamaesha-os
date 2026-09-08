@@ -215,9 +215,7 @@ BEGIN
         IF OLD.status = 'pending'
            AND NEW.status NOT IN (
                'pending',
-               'running',
-               'failed',
-               'cancelled'
+               'running'
            ) THEN
             RAISE EXCEPTION
                 'Invalid agent run step lifecycle transition: pending -> %',
