@@ -513,6 +513,53 @@ COMMENT ON FUNCTION raamaesha.prevent_published_agent_capability_binding_mutatio
 
 
 -- =============================================================================
+-- Published Agent Version Binding Insert Protection
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION raamaesha.prevent_published_agent_capability_binding_insert()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    agent_version_current_status public.agent_version_status;
+BEGIN
+
+    SELECT av.status
+    INTO agent_version_current_status
+    FROM raamaesha.agent_versions AS av
+    WHERE av.id = NEW.agent_version_id;
+
+    IF agent_version_current_status IN
+       (
+           'published'::public.agent_version_status,
+           'retired'::public.agent_version_status
+       )
+    THEN
+        RAISE EXCEPTION
+            'Capability binding cannot be added because agent version % is %',
+            NEW.agent_version_id,
+            agent_version_current_status
+            USING ERRCODE = '55000';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+COMMENT ON FUNCTION raamaesha.prevent_published_agent_capability_binding_insert() IS
+'Prevents adding capability bindings to published or retired agent versions.';
+
+-- =============================================================================
+-- Published Agent Version Binding Insert Trigger
+-- =============================================================================
+
+CREATE TRIGGER trg_agent_capability_bindings_published_insert
+BEFORE INSERT
+ON raamaesha.agent_capability_bindings
+FOR EACH ROW
+EXECUTE FUNCTION raamaesha.prevent_published_agent_capability_binding_insert();
+
+-- =============================================================================
 -- Published Agent Version Binding Delete Protection
 -- =============================================================================
 
@@ -600,4 +647,3 @@ EXECUTE FUNCTION raamaesha.prevent_published_agent_capability_binding_delete();
 -- =============================================================================
 
 COMMIT;
-
