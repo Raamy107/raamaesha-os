@@ -1,0 +1,3978 @@
+
+================================================================================
+FILE: 050_workflow_foundation.sql
+================================================================================
+
+-- =============================================================================
+-- RaamaEsha OS Founder Edition
+-- Migration : 050_workflow_foundation.sql
+-- Module    : Workflow Engine
+--
+-- Purpose:
+--   Creates the foundational durable workflow model for tenant-scoped
+--   business process definition, versioning, execution, and retry history.
+--
+-- Responsibilities:
+--   - Workflow definition identity
+--   - Workflow version management
+--   - Workflow step definition
+--   - Workflow runtime instances
+--   - Workflow step execution attempts
+--   - Version integrity
+--   - Tenant integrity
+--   - Runtime lifecycle integrity
+--   - Historical execution preservation
+--
+-- Design Boundary:
+--   - Event Platform remains responsible for immutable event occurrences.
+--   - Rules Engine remains responsible for business rule evaluation.
+--   - Capability / Integration Platform remains responsible for operation
+--     execution.
+--   - Scheduler, workers, retry orchestration, and transition execution
+--     remain outside this database foundation.
+--
+-- Dependencies:
+--   - 001_extensions.sql
+--   - 003_schema_core.sql
+--   - 007_identity_actor.sql
+--   - 013_audit_infrastructure.sql
+--   - 044_event_platform.sql
+--
+-- PostgreSQL : 17+
+-- =============================================================================
+
+
+BEGIN;
+
+
+-- =============================================================================
+-- ENUM : workflow_definition_status
+-- =============================================================================
+--
+-- Defines the lifecycle state of a workflow definition identity.
+-- =============================================================================
+
+CREATE TYPE public.workflow_definition_status AS ENUM
+(
+    'draft',
+    'active',
+    'archived'
+);
+
+
+COMMENT ON TYPE public.workflow_definition_status IS
+'Defines the lifecycle states of a workflow definition within the Workflow Engine.';
+
+
+-- =============================================================================
+-- ENUM : workflow_version_status
+-- =============================================================================
+--
+-- Defines the lifecycle state of a workflow version.
+-- =============================================================================
+
+CREATE TYPE public.workflow_version_status AS ENUM
+(
+    'draft',
+    'published',
+    'retired'
+);
+
+
+COMMENT ON TYPE public.workflow_version_status IS
+'Defines the lifecycle states of a workflow version within the Workflow Engine.';
+
+
+-- =============================================================================
+-- ENUM : workflow_step_type
+-- =============================================================================
+--
+-- Defines the initial supported workflow step categories.
+-- =============================================================================
+
+CREATE TYPE public.workflow_step_type AS ENUM
+(
+    'action',
+    'condition',
+    'wait',
+    'notification'
+);
+
+
+COMMENT ON TYPE public.workflow_step_type IS
+'Defines the supported foundational workflow step types.';
+
+
+-- =============================================================================
+-- ENUM : workflow_instance_status
+-- =============================================================================
+--
+-- Defines the lifecycle state of a workflow runtime instance.
+-- =============================================================================
+
+CREATE TYPE public.workflow_instance_status AS ENUM
+(
+    'pending',
+    'running',
+    'completed',
+    'failed',
+    'cancelled'
+);
+
+
+COMMENT ON TYPE public.workflow_instance_status IS
+'Defines the lifecycle states of a workflow runtime instance.';
+
+
+-- =============================================================================
+-- ENUM : workflow_step_execution_status
+-- =============================================================================
+--
+-- Defines the lifecycle state of an individual workflow step execution
+-- attempt.
+-- =============================================================================
+
+CREATE TYPE public.workflow_step_execution_status AS ENUM
+(
+    'pending',
+    'running',
+    'succeeded',
+    'failed',
+    'cancelled'
+);
+
+
+COMMENT ON TYPE public.workflow_step_execution_status IS
+'Defines the lifecycle states of a workflow step execution attempt.';
+
+
+-- =============================================================================
+-- TABLE : workflow_definitions
+-- =============================================================================
+--
+-- Represents the stable identity of a business workflow within one
+-- organization.
+--
+-- Definition metadata is intentionally separated from executable workflow
+-- version structure.
+-- =============================================================================
+
+CREATE TABLE raamaesha.workflow_definitions
+(
+    id
+        UUID
+        NOT NULL
+        DEFAULT gen_random_uuid(),
+
+    organization_id
+        UUID
+        NOT NULL,
+
+    code
+        CITEXT
+        NOT NULL,
+
+    name
+        TEXT
+        NOT NULL,
+
+    description
+        TEXT,
+
+    status
+        public.workflow_definition_status
+        NOT NULL
+        DEFAULT 'draft',
+
+    created_by
+        UUID,
+
+    updated_by
+        UUID,
+
+    created_at
+        TIMESTAMPTZ
+        NOT NULL
+        DEFAULT CURRENT_TIMESTAMP,
+
+    updated_at
+        TIMESTAMPTZ
+        NOT NULL
+        DEFAULT CURRENT_TIMESTAMP,
+
+    deleted_at
+        TIMESTAMPTZ,
+
+
+    CONSTRAINT pk_workflow_definitions
+        PRIMARY KEY (id),
+
+
+    CONSTRAINT fk_workflow_definitions_organization
+        FOREIGN KEY (organization_id)
+        REFERENCES raamaesha.organizations(id)
+        ON UPDATE CASCADE
+        ON DELETE RESTRICT,
+
+
+    CONSTRAINT fk_workflow_definitions_created_by_actor
+        FOREIGN KEY (created_by)
+        REFERENCES raamaesha.actors(id)
+        ON UPDATE CASCADE
+        ON DELETE SET NULL,
+
+
+    CONSTRAINT fk_workflow_definitions_updated_by_actor
+        FOREIGN KEY (updated_by)
+        REFERENCES raamaesha.actors(id)
+        ON UPDATE CASCADE
+        ON DELETE SET NULL,
+
+
+    CONSTRAINT ck_workflow_definitions_code_not_blank
+        CHECK (
+            length(trim(code::TEXT)) > 0
+        ),
+
+
+    CONSTRAINT ck_workflow_definitions_name_not_blank
+        CHECK (
+            length(trim(name)) > 0
+        ),
+
+
+    CONSTRAINT uq_workflow_definitions_id_organization
+        UNIQUE (id, organization_id)
+);
+
+
+COMMENT ON TABLE raamaesha.workflow_definitions IS
+'Stable tenant-scoped identities for business workflows within the RaamaEsha OS Workflow Engine.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_definitions.id IS
+'Globally unique identifier for the workflow definition.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_definitions.organization_id IS
+'Tenant organization that owns the workflow definition.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_definitions.code IS
+'Stable machine-readable workflow code unique within the organization.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_definitions.name IS
+'Human-readable workflow definition name.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_definitions.description IS
+'Optional description of the workflow business purpose.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_definitions.status IS
+'Current lifecycle state of the workflow definition.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_definitions.created_by IS
+'Actor that created the workflow definition.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_definitions.updated_by IS
+'Actor that last updated the workflow definition.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_definitions.created_at IS
+'Timestamp when the workflow definition was created.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_definitions.updated_at IS
+'Timestamp when the workflow definition was last updated.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_definitions.deleted_at IS
+'Soft deletion timestamp. NULL indicates that the workflow definition has not been soft deleted.';
+
+
+CREATE INDEX idx_workflow_definitions_organization_id
+    ON raamaesha.workflow_definitions (organization_id);
+
+
+CREATE INDEX idx_workflow_definitions_status
+    ON raamaesha.workflow_definitions (status);
+
+
+CREATE INDEX idx_workflow_definitions_deleted_at
+    ON raamaesha.workflow_definitions (deleted_at);
+
+
+CREATE UNIQUE INDEX ux_workflow_definitions_organization_code
+    ON raamaesha.workflow_definitions
+    (
+        organization_id,
+        code
+    )
+    WHERE deleted_at IS NULL;
+
+
+COMMENT ON INDEX
+    raamaesha.ux_workflow_definitions_organization_code IS
+'Ensures that each organization has at most one non-deleted workflow definition for a given code.';
+
+
+-- =============================================================================
+-- TABLE : workflow_versions
+-- =============================================================================
+--
+-- Represents a version-controlled executable form of a workflow definition.
+-- =============================================================================
+
+CREATE TABLE raamaesha.workflow_versions
+(
+    id
+        UUID
+        NOT NULL
+        DEFAULT gen_random_uuid(),
+
+    workflow_definition_id
+        UUID
+        NOT NULL,
+
+    version_number
+        INTEGER
+        NOT NULL,
+
+    status
+        public.workflow_version_status
+        NOT NULL
+        DEFAULT 'draft',
+
+    description
+        TEXT,
+
+    published_at
+        TIMESTAMPTZ,
+
+    created_by
+        UUID,
+
+    updated_by
+        UUID,
+
+    created_at
+        TIMESTAMPTZ
+        NOT NULL
+        DEFAULT CURRENT_TIMESTAMP,
+
+    updated_at
+        TIMESTAMPTZ
+        NOT NULL
+        DEFAULT CURRENT_TIMESTAMP,
+
+    deleted_at
+        TIMESTAMPTZ,
+
+
+    CONSTRAINT pk_workflow_versions
+        PRIMARY KEY (id),
+
+
+    CONSTRAINT fk_workflow_versions_definition
+        FOREIGN KEY (workflow_definition_id)
+        REFERENCES raamaesha.workflow_definitions(id)
+        ON UPDATE CASCADE
+        ON DELETE RESTRICT,
+
+
+    CONSTRAINT fk_workflow_versions_created_by_actor
+        FOREIGN KEY (created_by)
+        REFERENCES raamaesha.actors(id)
+        ON UPDATE CASCADE
+        ON DELETE SET NULL,
+
+
+    CONSTRAINT fk_workflow_versions_updated_by_actor
+        FOREIGN KEY (updated_by)
+        REFERENCES raamaesha.actors(id)
+        ON UPDATE CASCADE
+        ON DELETE SET NULL,
+
+
+    CONSTRAINT ck_workflow_versions_version_number_positive
+        CHECK (
+            version_number >= 1
+        ),
+
+
+    CONSTRAINT ck_workflow_versions_published_has_timestamp
+        CHECK (
+            status <> 'published'
+            OR published_at IS NOT NULL
+        ),
+
+
+    CONSTRAINT ck_workflow_versions_draft_has_no_published_timestamp
+        CHECK (
+            status <> 'draft'
+            OR published_at IS NULL
+        ),
+
+
+    CONSTRAINT uq_workflow_versions_definition_version
+        UNIQUE (
+            workflow_definition_id,
+            version_number
+        ),
+
+
+    CONSTRAINT uq_workflow_versions_id_definition
+        UNIQUE (
+            id,
+            workflow_definition_id
+        )
+);
+
+
+COMMENT ON TABLE raamaesha.workflow_versions IS
+'Version-controlled executable workflow definitions preserved for historical runtime integrity.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_versions.id IS
+'Globally unique identifier for the workflow version.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_versions.workflow_definition_id IS
+'Workflow definition identity to which this version belongs.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_versions.version_number IS
+'Monotonically assigned workflow version number within a workflow definition.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_versions.status IS
+'Current lifecycle state of the workflow version.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_versions.description IS
+'Optional description of the changes or purpose of this workflow version.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_versions.published_at IS
+'Timestamp when the workflow version became published.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_versions.created_by IS
+'Actor that created the workflow version.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_versions.updated_by IS
+'Actor that last updated the workflow version.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_versions.created_at IS
+'Timestamp when the workflow version was created.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_versions.updated_at IS
+'Timestamp when the workflow version was last updated.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_versions.deleted_at IS
+'Soft deletion timestamp. NULL indicates that the workflow version has not been soft deleted.';
+
+
+CREATE INDEX idx_workflow_versions_definition_id
+    ON raamaesha.workflow_versions (workflow_definition_id);
+
+
+CREATE INDEX idx_workflow_versions_status
+    ON raamaesha.workflow_versions (status);
+
+
+CREATE INDEX idx_workflow_versions_deleted_at
+    ON raamaesha.workflow_versions (deleted_at);
+
+
+CREATE INDEX idx_workflow_versions_definition_version
+    ON raamaesha.workflow_versions
+    (
+        workflow_definition_id,
+        version_number
+    );
+
+
+CREATE UNIQUE INDEX ux_workflow_versions_one_published
+    ON raamaesha.workflow_versions
+    (
+        workflow_definition_id
+    )
+    WHERE status = 'published'
+      AND deleted_at IS NULL;
+
+
+COMMENT ON INDEX
+    raamaesha.ux_workflow_versions_one_published IS
+'Ensures that each workflow definition has at most one non-deleted published workflow version.';
+
+
+-- =============================================================================
+-- TABLE : workflow_steps
+-- =============================================================================
+--
+-- Represents executable workflow structure belonging to one workflow version.
+-- =============================================================================
+
+CREATE TABLE raamaesha.workflow_steps
+(
+    id
+        UUID
+        NOT NULL
+        DEFAULT gen_random_uuid(),
+
+    workflow_version_id
+        UUID
+        NOT NULL,
+
+    code
+        CITEXT
+        NOT NULL,
+
+    name
+        TEXT
+        NOT NULL,
+
+    description
+        TEXT,
+
+    sequence_no
+        INTEGER
+        NOT NULL,
+
+    step_type
+        public.workflow_step_type
+        NOT NULL,
+
+    is_required
+        BOOLEAN
+        NOT NULL
+        DEFAULT TRUE,
+
+    created_by
+        UUID,
+
+    updated_by
+        UUID,
+
+    created_at
+        TIMESTAMPTZ
+        NOT NULL
+        DEFAULT CURRENT_TIMESTAMP,
+
+    updated_at
+        TIMESTAMPTZ
+        NOT NULL
+        DEFAULT CURRENT_TIMESTAMP,
+
+    deleted_at
+        TIMESTAMPTZ,
+
+
+    CONSTRAINT pk_workflow_steps
+        PRIMARY KEY (id),
+
+
+    CONSTRAINT fk_workflow_steps_version
+        FOREIGN KEY (workflow_version_id)
+        REFERENCES raamaesha.workflow_versions(id)
+        ON UPDATE CASCADE
+        ON DELETE RESTRICT,
+
+
+    CONSTRAINT fk_workflow_steps_created_by_actor
+        FOREIGN KEY (created_by)
+        REFERENCES raamaesha.actors(id)
+        ON UPDATE CASCADE
+        ON DELETE SET NULL,
+
+
+    CONSTRAINT fk_workflow_steps_updated_by_actor
+        FOREIGN KEY (updated_by)
+        REFERENCES raamaesha.actors(id)
+        ON UPDATE CASCADE
+        ON DELETE SET NULL,
+
+
+    CONSTRAINT ck_workflow_steps_sequence_positive
+        CHECK (
+            sequence_no >= 1
+        ),
+
+
+    CONSTRAINT ck_workflow_steps_name_not_blank
+        CHECK (
+            length(trim(name)) > 0
+        ),
+
+
+    CONSTRAINT ck_workflow_steps_code_not_blank
+        CHECK (
+            length(trim(code::TEXT)) > 0
+        ),
+
+
+    CONSTRAINT uq_workflow_steps_id_version
+        UNIQUE (
+            id,
+            workflow_version_id
+        )
+);
+
+
+COMMENT ON TABLE raamaesha.workflow_steps IS
+'Workflow step definitions belonging to a specific workflow version.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_steps.id IS
+'Globally unique identifier for the workflow step.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_steps.workflow_version_id IS
+'Workflow version containing this step definition.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_steps.code IS
+'Stable machine-readable step code unique within the workflow version.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_steps.name IS
+'Human-readable workflow step name.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_steps.description IS
+'Optional description of the workflow step.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_steps.sequence_no IS
+'Positive execution sequence position of the step within the workflow version.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_steps.step_type IS
+'Foundational category defining the type of work represented by the step.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_steps.is_required IS
+'Indicates whether the workflow step is required for normal workflow progression.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_steps.created_by IS
+'Actor that created the workflow step.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_steps.updated_by IS
+'Actor that last updated the workflow step.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_steps.created_at IS
+'Timestamp when the workflow step was created.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_steps.updated_at IS
+'Timestamp when the workflow step was last updated.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_steps.deleted_at IS
+'Soft deletion timestamp. NULL indicates that the workflow step has not been soft deleted.';
+
+
+CREATE INDEX idx_workflow_steps_version_id
+    ON raamaesha.workflow_steps (workflow_version_id);
+
+
+CREATE INDEX idx_workflow_steps_sequence_no
+    ON raamaesha.workflow_steps (sequence_no);
+
+
+CREATE INDEX idx_workflow_steps_step_type
+    ON raamaesha.workflow_steps (step_type);
+
+
+CREATE INDEX idx_workflow_steps_deleted_at
+    ON raamaesha.workflow_steps (deleted_at);
+
+
+CREATE UNIQUE INDEX ux_workflow_steps_version_sequence
+    ON raamaesha.workflow_steps
+    (
+        workflow_version_id,
+        sequence_no
+    )
+    WHERE deleted_at IS NULL;
+
+
+CREATE UNIQUE INDEX ux_workflow_steps_version_code
+    ON raamaesha.workflow_steps
+    (
+        workflow_version_id,
+        code
+    )
+    WHERE deleted_at IS NULL;
+
+
+COMMENT ON INDEX
+    raamaesha.ux_workflow_steps_version_sequence IS
+'Ensures that each non-deleted workflow step has a unique sequence position within its workflow version.';
+
+
+COMMENT ON INDEX
+    raamaesha.ux_workflow_steps_version_code IS
+'Ensures that each non-deleted workflow step has a unique code within its workflow version.';
+
+
+-- =============================================================================
+-- TABLE : workflow_instances
+-- =============================================================================
+--
+-- Represents one durable runtime execution of a workflow version.
+-- =============================================================================
+
+CREATE TABLE raamaesha.workflow_instances
+(
+    id
+        UUID
+        NOT NULL
+        DEFAULT gen_random_uuid(),
+
+    organization_id
+        UUID
+        NOT NULL,
+
+    workflow_definition_id
+        UUID
+        NOT NULL,
+
+    workflow_version_id
+        UUID
+        NOT NULL,
+
+    status
+        public.workflow_instance_status
+        NOT NULL
+        DEFAULT 'pending',
+
+    correlation_id
+        TEXT,
+
+    trigger_event_id
+        UUID,
+
+    context
+        JSONB
+        NOT NULL
+        DEFAULT '{}'::JSONB,
+
+    started_at
+        TIMESTAMPTZ,
+
+    completed_at
+        TIMESTAMPTZ,
+
+    created_by
+        UUID,
+
+    updated_by
+        UUID,
+
+    created_at
+        TIMESTAMPTZ
+        NOT NULL
+        DEFAULT CURRENT_TIMESTAMP,
+
+    updated_at
+        TIMESTAMPTZ
+        NOT NULL
+        DEFAULT CURRENT_TIMESTAMP,
+
+    deleted_at
+        TIMESTAMPTZ,
+
+
+    CONSTRAINT pk_workflow_instances
+        PRIMARY KEY (id),
+
+
+    CONSTRAINT fk_workflow_instances_organization
+        FOREIGN KEY (organization_id)
+        REFERENCES raamaesha.organizations(id)
+        ON UPDATE CASCADE
+        ON DELETE RESTRICT,
+
+
+    CONSTRAINT fk_workflow_instances_definition_organization
+        FOREIGN KEY (
+            workflow_definition_id,
+            organization_id
+        )
+        REFERENCES raamaesha.workflow_definitions(
+            id,
+            organization_id
+        )
+        ON UPDATE CASCADE
+        ON DELETE RESTRICT,
+
+
+    CONSTRAINT fk_workflow_instances_version_definition
+        FOREIGN KEY (
+            workflow_version_id,
+            workflow_definition_id
+        )
+        REFERENCES raamaesha.workflow_versions(
+            id,
+            workflow_definition_id
+        )
+        ON UPDATE CASCADE
+        ON DELETE RESTRICT,
+
+
+    CONSTRAINT fk_workflow_instances_trigger_event
+        FOREIGN KEY (trigger_event_id)
+        REFERENCES raamaesha.events(id)
+        ON UPDATE CASCADE
+        ON DELETE RESTRICT,
+
+
+    CONSTRAINT fk_workflow_instances_created_by_actor
+        FOREIGN KEY (created_by)
+        REFERENCES raamaesha.actors(id)
+        ON UPDATE CASCADE
+        ON DELETE SET NULL,
+
+
+    CONSTRAINT fk_workflow_instances_updated_by_actor
+        FOREIGN KEY (updated_by)
+        REFERENCES raamaesha.actors(id)
+        ON UPDATE CASCADE
+        ON DELETE SET NULL,
+
+
+    CONSTRAINT ck_workflow_instances_context_object
+        CHECK (
+            jsonb_typeof(context) = 'object'
+        ),
+
+
+    CONSTRAINT ck_workflow_instances_pending_not_started
+        CHECK (
+            status <> 'pending'
+            OR started_at IS NULL
+        ),
+
+
+    CONSTRAINT ck_workflow_instances_pending_not_completed
+        CHECK (
+            status <> 'pending'
+            OR completed_at IS NULL
+        ),
+
+
+    CONSTRAINT ck_workflow_instances_running_started
+        CHECK (
+            status <> 'running'
+            OR started_at IS NOT NULL
+        ),
+
+
+    CONSTRAINT ck_workflow_instances_running_not_completed
+        CHECK (
+            status <> 'running'
+            OR completed_at IS NULL
+        ),
+
+
+    CONSTRAINT ck_workflow_instances_terminal_started
+        CHECK (
+            status NOT IN ('completed', 'failed', 'cancelled')
+            OR started_at IS NOT NULL
+        ),
+
+
+    CONSTRAINT ck_workflow_instances_terminal_completed
+        CHECK (
+            status NOT IN ('completed', 'failed', 'cancelled')
+            OR completed_at IS NOT NULL
+        ),
+
+
+    CONSTRAINT uq_workflow_instances_id_version
+        UNIQUE (
+            id,
+            workflow_version_id
+        )
+);
+
+
+COMMENT ON TABLE raamaesha.workflow_instances IS
+'Durable tenant-scoped runtime instances preserving the exact workflow version used for execution.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_instances.id IS
+'Globally unique identifier for the workflow runtime instance.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_instances.organization_id IS
+'Tenant organization in whose business context the workflow instance executes.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_instances.workflow_definition_id IS
+'Workflow definition identity associated with this runtime instance.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_instances.workflow_version_id IS
+'Exact workflow version used by this runtime instance and preserved for historical integrity.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_instances.status IS
+'Current lifecycle state of the workflow runtime instance.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_instances.correlation_id IS
+'Optional correlation identifier used to associate the workflow instance with related operations and business activity.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_instances.trigger_event_id IS
+'Optional immutable Event Platform event that initiated the workflow instance.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_instances.context IS
+'Durable structured runtime context for the workflow instance.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_instances.started_at IS
+'Timestamp when workflow runtime execution started.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_instances.completed_at IS
+'Timestamp when workflow runtime execution reached a terminal state.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_instances.created_by IS
+'Actor that created the workflow runtime instance.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_instances.updated_by IS
+'Actor that last updated the workflow runtime instance.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_instances.created_at IS
+'Timestamp when the workflow runtime instance was created.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_instances.updated_at IS
+'Timestamp when the workflow runtime instance was last updated.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_instances.deleted_at IS
+'Soft deletion timestamp. NULL indicates that the workflow instance has not been soft deleted.';
+
+
+CREATE INDEX idx_workflow_instances_organization_id
+    ON raamaesha.workflow_instances (organization_id);
+
+
+CREATE INDEX idx_workflow_instances_definition_id
+    ON raamaesha.workflow_instances (workflow_definition_id);
+
+
+CREATE INDEX idx_workflow_instances_version_id
+    ON raamaesha.workflow_instances (workflow_version_id);
+
+
+CREATE INDEX idx_workflow_instances_status
+    ON raamaesha.workflow_instances (status);
+
+
+CREATE INDEX idx_workflow_instances_correlation_id
+    ON raamaesha.workflow_instances (correlation_id)
+    WHERE correlation_id IS NOT NULL;
+
+
+CREATE INDEX idx_workflow_instances_trigger_event_id
+    ON raamaesha.workflow_instances (trigger_event_id)
+    WHERE trigger_event_id IS NOT NULL;
+
+
+CREATE INDEX idx_workflow_instances_created_at
+    ON raamaesha.workflow_instances (created_at DESC);
+
+
+CREATE INDEX idx_workflow_instances_deleted_at
+    ON raamaesha.workflow_instances (deleted_at);
+
+
+-- =============================================================================
+-- TABLE : workflow_step_executions
+-- =============================================================================
+--
+-- Represents one durable execution attempt for one workflow step.
+--
+-- workflow_version_id is intentionally stored here so PostgreSQL can enforce
+-- that the instance and step belong to the same workflow version.
+-- =============================================================================
+
+CREATE TABLE raamaesha.workflow_step_executions
+(
+    id
+        UUID
+        NOT NULL
+        DEFAULT gen_random_uuid(),
+
+    workflow_instance_id
+        UUID
+        NOT NULL,
+
+    workflow_version_id
+        UUID
+        NOT NULL,
+
+    workflow_step_id
+        UUID
+        NOT NULL,
+
+    attempt_number
+        INTEGER
+        NOT NULL,
+
+    status
+        public.workflow_step_execution_status
+        NOT NULL
+        DEFAULT 'pending',
+
+    started_at
+        TIMESTAMPTZ,
+
+    completed_at
+        TIMESTAMPTZ,
+
+    error_code
+        TEXT,
+
+    error_message
+        TEXT,
+
+    result
+        JSONB,
+
+    created_by
+        UUID,
+
+    updated_by
+        UUID,
+
+    created_at
+        TIMESTAMPTZ
+        NOT NULL
+        DEFAULT CURRENT_TIMESTAMP,
+
+    updated_at
+        TIMESTAMPTZ
+        NOT NULL
+        DEFAULT CURRENT_TIMESTAMP,
+
+    deleted_at
+        TIMESTAMPTZ,
+
+
+    CONSTRAINT pk_workflow_step_executions
+        PRIMARY KEY (id),
+
+
+    CONSTRAINT fk_workflow_step_executions_instance_version
+        FOREIGN KEY (
+            workflow_instance_id,
+            workflow_version_id
+        )
+        REFERENCES raamaesha.workflow_instances(
+            id,
+            workflow_version_id
+        )
+        ON UPDATE CASCADE
+        ON DELETE RESTRICT,
+
+
+    CONSTRAINT fk_workflow_step_executions_step_version
+        FOREIGN KEY (
+            workflow_step_id,
+            workflow_version_id
+        )
+        REFERENCES raamaesha.workflow_steps(
+            id,
+            workflow_version_id
+        )
+        ON UPDATE CASCADE
+        ON DELETE RESTRICT,
+
+
+    CONSTRAINT fk_workflow_step_executions_created_by_actor
+        FOREIGN KEY (created_by)
+        REFERENCES raamaesha.actors(id)
+        ON UPDATE CASCADE
+        ON DELETE SET NULL,
+
+
+    CONSTRAINT fk_workflow_step_executions_updated_by_actor
+        FOREIGN KEY (updated_by)
+        REFERENCES raamaesha.actors(id)
+        ON UPDATE CASCADE
+        ON DELETE SET NULL,
+
+
+    CONSTRAINT ck_workflow_step_executions_attempt_positive
+        CHECK (
+            attempt_number >= 1
+        ),
+
+
+    CONSTRAINT ck_workflow_step_executions_pending_not_started
+        CHECK (
+            status <> 'pending'
+            OR started_at IS NULL
+        ),
+
+
+    CONSTRAINT ck_workflow_step_executions_pending_not_completed
+        CHECK (
+            status <> 'pending'
+            OR completed_at IS NULL
+        ),
+
+
+    CONSTRAINT ck_workflow_step_executions_running_started
+        CHECK (
+            status <> 'running'
+            OR started_at IS NOT NULL
+        ),
+
+
+    CONSTRAINT ck_workflow_step_executions_running_not_completed
+        CHECK (
+            status <> 'running'
+            OR completed_at IS NULL
+        ),
+
+
+    CONSTRAINT ck_workflow_step_executions_terminal_started
+        CHECK (
+            status NOT IN ('succeeded', 'failed', 'cancelled')
+            OR started_at IS NOT NULL
+        ),
+
+
+    CONSTRAINT ck_workflow_step_executions_terminal_completed
+        CHECK (
+            status NOT IN ('succeeded', 'failed', 'cancelled')
+            OR completed_at IS NOT NULL
+        ),
+
+
+    CONSTRAINT uq_workflow_step_executions_attempt
+        UNIQUE (
+            workflow_instance_id,
+            workflow_step_id,
+            attempt_number
+        )
+);
+
+
+COMMENT ON TABLE raamaesha.workflow_step_executions IS
+'Durable execution attempts for workflow steps, including retry history.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_step_executions.id IS
+'Globally unique identifier for the workflow step execution attempt.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_step_executions.workflow_instance_id IS
+'Workflow runtime instance containing the step execution.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_step_executions.workflow_version_id IS
+'Workflow version shared by the runtime instance and executed workflow step, enforcing cross-version integrity.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_step_executions.workflow_step_id IS
+'Workflow step definition being executed.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_step_executions.attempt_number IS
+'One-based execution attempt number for the workflow step within the workflow instance.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_step_executions.status IS
+'Current lifecycle state of the workflow step execution attempt.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_step_executions.started_at IS
+'Timestamp when this step execution attempt started.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_step_executions.completed_at IS
+'Timestamp when this step execution attempt reached a terminal state.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_step_executions.error_code IS
+'Optional machine-readable error code associated with a failed execution attempt.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_step_executions.error_message IS
+'Optional human-readable error information associated with a failed execution attempt.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_step_executions.result IS
+'Optional structured result produced by the workflow step execution attempt.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_step_executions.created_by IS
+'Actor or execution identity that created the step execution record.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_step_executions.updated_by IS
+'Actor or execution identity that last updated the step execution record.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_step_executions.created_at IS
+'Timestamp when the step execution attempt was created.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_step_executions.updated_at IS
+'Timestamp when the step execution attempt was last updated.';
+
+
+COMMENT ON COLUMN raamaesha.workflow_step_executions.deleted_at IS
+'Soft deletion timestamp. NULL indicates that the step execution record has not been soft deleted.';
+
+
+CREATE INDEX idx_workflow_step_executions_instance_id
+    ON raamaesha.workflow_step_executions (workflow_instance_id);
+
+
+CREATE INDEX idx_workflow_step_executions_version_id
+    ON raamaesha.workflow_step_executions (workflow_version_id);
+
+
+CREATE INDEX idx_workflow_step_executions_step_id
+    ON raamaesha.workflow_step_executions (workflow_step_id);
+
+
+CREATE INDEX idx_workflow_step_executions_status
+    ON raamaesha.workflow_step_executions (status);
+
+
+CREATE INDEX idx_workflow_step_executions_created_at
+    ON raamaesha.workflow_step_executions (created_at DESC);
+
+
+CREATE INDEX idx_workflow_step_executions_pending
+    ON raamaesha.workflow_step_executions (created_at)
+    WHERE status = 'pending'
+      AND deleted_at IS NULL;
+
+
+CREATE INDEX idx_workflow_step_executions_deleted_at
+    ON raamaesha.workflow_step_executions (deleted_at);
+
+
+COMMENT ON INDEX
+    raamaesha.idx_workflow_step_executions_pending IS
+'Supports efficient discovery of non-deleted pending workflow step execution attempts.';
+
+
+-- =============================================================================
+-- Workflow Version Immutability
+-- =============================================================================
+--
+-- Published and retired workflow versions are structurally immutable.
+-- Lifecycle status itself may transition from published to retired.
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION raamaesha.prevent_published_workflow_version_mutation()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS
+$$
+BEGIN
+
+    IF OLD.status IN ('published', 'retired') THEN
+
+        IF OLD.status = 'published'
+           AND NEW.status NOT IN ('published', 'retired')
+        THEN
+            RAISE EXCEPTION
+                'Published workflow versions may only remain published or transition to retired'
+                USING ERRCODE = '55000';
+        END IF;
+
+
+        IF OLD.status = 'retired'
+           AND NEW.status <> 'retired'
+        THEN
+            RAISE EXCEPTION
+                'Retired workflow versions cannot change lifecycle status'
+                USING ERRCODE = '55000';
+        END IF;
+
+
+        IF TG_OP = 'DELETE' THEN
+            RAISE EXCEPTION
+                'Published or retired workflow versions cannot be deleted'
+                USING ERRCODE = '55000';
+        END IF;
+
+
+        IF NEW.workflow_definition_id IS DISTINCT FROM OLD.workflow_definition_id
+           OR NEW.version_number IS DISTINCT FROM OLD.version_number
+           OR NEW.description IS DISTINCT FROM OLD.description
+           OR NEW.published_at IS DISTINCT FROM OLD.published_at
+           OR NEW.created_by IS DISTINCT FROM OLD.created_by
+           OR NEW.created_at IS DISTINCT FROM OLD.created_at
+           OR NEW.deleted_at IS DISTINCT FROM OLD.deleted_at
+        THEN
+            RAISE EXCEPTION
+                'Published or retired workflow versions are structurally immutable'
+                USING ERRCODE = '55000';
+        END IF;
+
+    END IF;
+
+
+    RETURN NEW;
+
+END;
+$$;
+
+
+COMMENT ON FUNCTION raamaesha.prevent_published_workflow_version_mutation()
+IS
+'Prevents structural mutation or deletion of published and retired workflow versions while allowing lifecycle retirement.';
+
+
+CREATE TRIGGER trg_workflow_versions_immutable
+BEFORE UPDATE OR DELETE
+ON raamaesha.workflow_versions
+FOR EACH ROW
+EXECUTE FUNCTION raamaesha.prevent_published_workflow_version_mutation();
+
+
+-- =============================================================================
+-- Workflow Step Immutability
+-- =============================================================================
+--
+-- Steps belonging to published or retired versions are structurally immutable.
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION raamaesha.prevent_published_workflow_step_mutation()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS
+$$
+DECLARE
+    v_version_status public.workflow_version_status;
+BEGIN
+
+    SELECT status
+    INTO v_version_status
+    FROM raamaesha.workflow_versions
+    WHERE id = OLD.workflow_version_id
+    FOR UPDATE;
+
+
+    IF v_version_status IN ('published', 'retired') THEN
+
+        IF TG_OP = 'DELETE' THEN
+            RAISE EXCEPTION
+                'Workflow steps belonging to published or retired versions cannot be deleted'
+                USING ERRCODE = '55000';
+        END IF;
+
+
+        IF NEW.workflow_version_id IS DISTINCT FROM OLD.workflow_version_id
+           OR NEW.code IS DISTINCT FROM OLD.code
+           OR NEW.name IS DISTINCT FROM OLD.name
+           OR NEW.description IS DISTINCT FROM OLD.description
+           OR NEW.sequence_no IS DISTINCT FROM OLD.sequence_no
+           OR NEW.step_type IS DISTINCT FROM OLD.step_type
+           OR NEW.is_required IS DISTINCT FROM OLD.is_required
+           OR NEW.created_by IS DISTINCT FROM OLD.created_by
+           OR NEW.created_at IS DISTINCT FROM OLD.created_at
+           OR NEW.deleted_at IS DISTINCT FROM OLD.deleted_at
+        THEN
+            RAISE EXCEPTION
+                'Workflow steps belonging to published or retired versions are structurally immutable'
+                USING ERRCODE = '55000';
+        END IF;
+
+    END IF;
+
+
+    RETURN NEW;
+
+END;
+$$;
+
+
+COMMENT ON FUNCTION raamaesha.prevent_published_workflow_step_mutation()
+IS
+'Prevents structural mutation or deletion of workflow steps belonging to published or retired workflow versions.';
+
+
+CREATE TRIGGER trg_workflow_steps_immutable
+BEFORE UPDATE OR DELETE
+ON raamaesha.workflow_steps
+FOR EACH ROW
+EXECUTE FUNCTION raamaesha.prevent_published_workflow_step_mutation();
+
+
+-- =============================================================================
+-- Updated At Triggers
+-- =============================================================================
+--
+-- Reuses the shared audit infrastructure established by Migration 013.
+-- =============================================================================
+
+CREATE TRIGGER trg_workflow_definitions_set_updated_at
+BEFORE UPDATE
+ON raamaesha.workflow_definitions
+FOR EACH ROW
+EXECUTE FUNCTION raamaesha.set_updated_at();
+
+
+CREATE TRIGGER trg_workflow_versions_set_updated_at
+BEFORE UPDATE
+ON raamaesha.workflow_versions
+FOR EACH ROW
+EXECUTE FUNCTION raamaesha.set_updated_at();
+
+
+CREATE TRIGGER trg_workflow_steps_set_updated_at
+BEFORE UPDATE
+ON raamaesha.workflow_steps
+FOR EACH ROW
+EXECUTE FUNCTION raamaesha.set_updated_at();
+
+
+CREATE TRIGGER trg_workflow_instances_set_updated_at
+BEFORE UPDATE
+ON raamaesha.workflow_instances
+FOR EACH ROW
+EXECUTE FUNCTION raamaesha.set_updated_at();
+
+
+CREATE TRIGGER trg_workflow_step_executions_set_updated_at
+BEFORE UPDATE
+ON raamaesha.workflow_step_executions
+FOR EACH ROW
+EXECUTE FUNCTION raamaesha.set_updated_at();
+
+
+-- =============================================================================
+-- Constraint Documentation
+-- =============================================================================
+
+COMMENT ON CONSTRAINT
+    ck_workflow_versions_version_number_positive
+ON raamaesha.workflow_versions IS
+'Ensures that workflow version numbers begin at one and remain positive.';
+
+
+COMMENT ON CONSTRAINT
+    ck_workflow_versions_published_has_timestamp
+ON raamaesha.workflow_versions IS
+'Ensures that every published workflow version has a publication timestamp.';
+
+
+COMMENT ON CONSTRAINT
+    ck_workflow_versions_draft_has_no_published_timestamp
+ON raamaesha.workflow_versions IS
+'Ensures that draft workflow versions do not carry a publication timestamp.';
+
+
+COMMENT ON CONSTRAINT
+    ck_workflow_instances_context_object
+ON raamaesha.workflow_instances IS
+'Ensures that workflow runtime context is stored as a JSON object.';
+
+
+COMMENT ON CONSTRAINT
+    ck_workflow_step_executions_attempt_positive
+ON raamaesha.workflow_step_executions IS
+'Ensures that workflow step execution attempts are numbered from one upward.';
+
+
+COMMENT ON CONSTRAINT
+    uq_workflow_step_executions_attempt
+ON raamaesha.workflow_step_executions IS
+'Ensures that each workflow step execution attempt identity is unique within a workflow instance.';
+
+
+-- =============================================================================
+-- Migration Complete
+-- =============================================================================
+
+COMMIT;
+
+
+-- =============================================================================
+-- End Migration 050
+-- =============================================================================
+
+================================================================================
+FILE: 051_agent_foundation.sql
+================================================================================
+
+-- ============================================================
+-- RaamaEsha OS Founder Edition v1.0
+-- Migration 051: Agent Foundation
+-- ============================================================
+--
+-- Purpose:
+-- Establish the durable tenant-scoped foundation for AI agents.
+--
+-- Scope:
+--   1. Agent definitions
+--   2. Agent versions
+--   3. Agent instances
+--   4. Agent lifecycle integrity
+--   5. Published-version immutability
+--   6. Tenant and audit integrity
+--
+-- Explicitly NOT included:
+--   - Agent capability/tool bindings
+--   - Agent permissions/governance
+--   - Agent runs/execution
+--   - Agent factory/builder
+--   - Agent memory
+--   - Agent-to-agent orchestration
+--   - Application/trend intelligence
+--
+-- Architectural rule:
+-- Agents must operate through the RaamaEsha OS control plane.
+-- They must never bypass permissions, capabilities, operations,
+-- integrations, workflows, events, or audit infrastructure.
+-- ============================================================
+
+
+-- ============================================================
+-- 1. ENUM TYPES
+-- ============================================================
+
+-- Agent definition lifecycle.
+CREATE TYPE public.agent_definition_status AS ENUM (
+    'draft',
+    'active',
+    'archived'
+);
+
+
+-- Agent version lifecycle.
+CREATE TYPE public.agent_version_status AS ENUM (
+    'draft',
+    'published',
+    'retired'
+);
+
+
+-- Agent instance lifecycle.
+CREATE TYPE public.agent_instance_status AS ENUM (
+    'pending',
+    'active',
+    'paused',
+    'stopped',
+    'failed'
+);
+
+
+-- ============================================================
+-- 2. AGENT DEFINITIONS
+-- ============================================================
+
+CREATE TABLE raamaesha.agent_definitions
+(
+    id UUID NOT NULL
+        DEFAULT gen_random_uuid(),
+
+    organization_id UUID NOT NULL,
+
+    code CITEXT NOT NULL,
+
+    name TEXT NOT NULL,
+
+    description TEXT,
+
+    status public.agent_definition_status NOT NULL
+        DEFAULT 'draft',
+
+    created_by UUID,
+
+    updated_by UUID,
+
+    created_at TIMESTAMPTZ NOT NULL
+        DEFAULT CURRENT_TIMESTAMP,
+
+    updated_at TIMESTAMPTZ NOT NULL
+        DEFAULT CURRENT_TIMESTAMP,
+
+    deleted_at TIMESTAMPTZ,
+
+    CONSTRAINT pk_agent_definitions
+        PRIMARY KEY (id),
+
+    CONSTRAINT fk_agent_definitions_organization
+        FOREIGN KEY (organization_id)
+        REFERENCES raamaesha.organizations(id)
+        ON UPDATE CASCADE
+        ON DELETE RESTRICT,
+
+    CONSTRAINT fk_agent_definitions_created_by_actor
+        FOREIGN KEY (created_by)
+        REFERENCES raamaesha.actors(id)
+        ON UPDATE CASCADE
+        ON DELETE SET NULL,
+
+    CONSTRAINT fk_agent_definitions_updated_by_actor
+        FOREIGN KEY (updated_by)
+        REFERENCES raamaesha.actors(id)
+        ON UPDATE CASCADE
+        ON DELETE SET NULL,
+
+    CONSTRAINT uq_agent_definitions_id_organization
+        UNIQUE (id, organization_id),
+
+    CONSTRAINT ck_agent_definitions_code_not_blank
+        CHECK (btrim(code::TEXT) <> ''),
+
+    CONSTRAINT ck_agent_definitions_name_not_blank
+        CHECK (btrim(name) <> '')
+);
+
+
+-- ============================================================
+-- 3. AGENT DEFINITION INDEXES
+-- ============================================================
+
+CREATE INDEX idx_agent_definitions_organization_id
+    ON raamaesha.agent_definitions (organization_id);
+
+CREATE INDEX idx_agent_definitions_organization_status
+    ON raamaesha.agent_definitions (
+        organization_id,
+        status
+    );
+
+CREATE INDEX idx_agent_definitions_deleted_at
+    ON raamaesha.agent_definitions (deleted_at);
+
+
+CREATE UNIQUE INDEX ux_agent_definitions_organization_code
+    ON raamaesha.agent_definitions (
+        organization_id,
+        code
+    )
+    WHERE deleted_at IS NULL;
+
+
+-- ============================================================
+-- 4. AGENT VERSIONS
+-- ============================================================
+
+CREATE TABLE raamaesha.agent_versions
+(
+    id UUID NOT NULL
+        DEFAULT gen_random_uuid(),
+
+    agent_definition_id UUID NOT NULL,
+
+    version_number INTEGER NOT NULL,
+
+    status public.agent_version_status NOT NULL
+        DEFAULT 'draft',
+
+    description TEXT,
+
+    configuration JSONB NOT NULL
+        DEFAULT '{}'::JSONB,
+
+    published_at TIMESTAMPTZ,
+
+    created_by UUID,
+
+    updated_by UUID,
+
+    created_at TIMESTAMPTZ NOT NULL
+        DEFAULT CURRENT_TIMESTAMP,
+
+    updated_at TIMESTAMPTZ NOT NULL
+        DEFAULT CURRENT_TIMESTAMP,
+
+    deleted_at TIMESTAMPTZ,
+
+    CONSTRAINT pk_agent_versions
+        PRIMARY KEY (id),
+
+    CONSTRAINT fk_agent_versions_agent_definition
+        FOREIGN KEY (agent_definition_id)
+        REFERENCES raamaesha.agent_definitions(id)
+        ON UPDATE CASCADE
+        ON DELETE RESTRICT,
+
+    CONSTRAINT fk_agent_versions_created_by_actor
+        FOREIGN KEY (created_by)
+        REFERENCES raamaesha.actors(id)
+        ON UPDATE CASCADE
+        ON DELETE SET NULL,
+
+    CONSTRAINT fk_agent_versions_updated_by_actor
+        FOREIGN KEY (updated_by)
+        REFERENCES raamaesha.actors(id)
+        ON UPDATE CASCADE
+        ON DELETE SET NULL,
+
+    CONSTRAINT uq_agent_versions_definition_version
+        UNIQUE (
+            agent_definition_id,
+            version_number
+        ),
+
+    CONSTRAINT uq_agent_versions_id_definition
+        UNIQUE (
+            id,
+            agent_definition_id
+        ),
+
+    CONSTRAINT ck_agent_versions_version_number_positive
+        CHECK (version_number >= 1),
+
+    CONSTRAINT ck_agent_versions_configuration_object
+        CHECK (
+            jsonb_typeof(configuration) = 'object'
+        ),
+
+    CONSTRAINT ck_agent_versions_published_requires_timestamp
+        CHECK (
+            status <> 'published'
+            OR published_at IS NOT NULL
+        ),
+
+    CONSTRAINT ck_agent_versions_draft_requires_no_timestamp
+        CHECK (
+            status <> 'draft'
+            OR published_at IS NULL
+        )
+);
+
+
+-- ============================================================
+-- 5. AGENT VERSION INDEXES
+-- ============================================================
+
+CREATE INDEX idx_agent_versions_definition_id
+    ON raamaesha.agent_versions (
+        agent_definition_id
+    );
+
+CREATE INDEX idx_agent_versions_definition_version
+    ON raamaesha.agent_versions (
+        agent_definition_id,
+        version_number
+    );
+
+CREATE INDEX idx_agent_versions_definition_status
+    ON raamaesha.agent_versions (
+        agent_definition_id,
+        status
+    );
+
+CREATE INDEX idx_agent_versions_deleted_at
+    ON raamaesha.agent_versions (deleted_at);
+
+
+CREATE UNIQUE INDEX ux_agent_versions_one_published
+    ON raamaesha.agent_versions (
+        agent_definition_id
+    )
+    WHERE status = 'published'
+      AND deleted_at IS NULL;
+
+
+-- ============================================================
+-- 6. AGENT INSTANCES
+-- ============================================================
+
+CREATE TABLE raamaesha.agent_instances
+(
+    id UUID NOT NULL
+        DEFAULT gen_random_uuid(),
+
+    organization_id UUID NOT NULL,
+
+    agent_definition_id UUID NOT NULL,
+
+    agent_version_id UUID NOT NULL,
+
+    status public.agent_instance_status NOT NULL
+        DEFAULT 'pending',
+
+    name TEXT,
+
+    context JSONB NOT NULL
+        DEFAULT '{}'::JSONB,
+
+    started_at TIMESTAMPTZ,
+
+    stopped_at TIMESTAMPTZ,
+
+    created_by UUID,
+
+    updated_by UUID,
+
+    created_at TIMESTAMPTZ NOT NULL
+        DEFAULT CURRENT_TIMESTAMP,
+
+    updated_at TIMESTAMPTZ NOT NULL
+        DEFAULT CURRENT_TIMESTAMP,
+
+    deleted_at TIMESTAMPTZ,
+
+    CONSTRAINT pk_agent_instances
+        PRIMARY KEY (id),
+
+    CONSTRAINT fk_agent_instances_organization
+        FOREIGN KEY (organization_id)
+        REFERENCES raamaesha.organizations(id)
+        ON UPDATE CASCADE
+        ON DELETE RESTRICT,
+
+    CONSTRAINT fk_agent_instances_definition_organization
+        FOREIGN KEY (
+            agent_definition_id,
+            organization_id
+        )
+        REFERENCES raamaesha.agent_definitions (
+            id,
+            organization_id
+        )
+        ON UPDATE CASCADE
+        ON DELETE RESTRICT,
+
+    CONSTRAINT fk_agent_instances_version_definition
+        FOREIGN KEY (
+            agent_version_id,
+            agent_definition_id
+        )
+        REFERENCES raamaesha.agent_versions (
+            id,
+            agent_definition_id
+        )
+        ON UPDATE CASCADE
+        ON DELETE RESTRICT,
+
+    CONSTRAINT fk_agent_instances_created_by_actor
+        FOREIGN KEY (created_by)
+        REFERENCES raamaesha.actors(id)
+        ON UPDATE CASCADE
+        ON DELETE SET NULL,
+
+    CONSTRAINT fk_agent_instances_updated_by_actor
+        FOREIGN KEY (updated_by)
+        REFERENCES raamaesha.actors(id)
+        ON UPDATE CASCADE
+        ON DELETE SET NULL,
+
+    CONSTRAINT uq_agent_instances_id_version
+        UNIQUE (
+            id,
+            agent_version_id
+        ),
+
+    CONSTRAINT ck_agent_instances_context_object
+        CHECK (
+            jsonb_typeof(context) = 'object'
+        ),
+
+    CONSTRAINT ck_agent_instances_name_not_blank
+        CHECK (
+            name IS NULL
+            OR btrim(name) <> ''
+        ),
+
+    CONSTRAINT ck_agent_instances_state_timestamps
+        CHECK (
+            (
+                status = 'pending'
+                AND started_at IS NULL
+                AND stopped_at IS NULL
+            )
+            OR
+            (
+                status IN ('active', 'paused')
+                AND started_at IS NOT NULL
+                AND stopped_at IS NULL
+            )
+            OR
+            (
+                status IN ('stopped', 'failed')
+                AND started_at IS NOT NULL
+                AND stopped_at IS NOT NULL
+            )
+        )
+);
+
+
+-- ============================================================
+-- 7. AGENT INSTANCE INDEXES
+-- ============================================================
+
+CREATE INDEX idx_agent_instances_organization_id
+    ON raamaesha.agent_instances (
+        organization_id
+    );
+
+CREATE INDEX idx_agent_instances_definition_id
+    ON raamaesha.agent_instances (
+        agent_definition_id
+    );
+
+CREATE INDEX idx_agent_instances_version_id
+    ON raamaesha.agent_instances (
+        agent_version_id
+    );
+
+CREATE INDEX idx_agent_instances_status
+    ON raamaesha.agent_instances (
+        status
+    );
+
+CREATE INDEX idx_agent_instances_created_at
+    ON raamaesha.agent_instances (
+        created_at
+    );
+
+CREATE INDEX idx_agent_instances_deleted_at
+    ON raamaesha.agent_instances (
+        deleted_at
+    );
+
+
+-- ============================================================
+-- 8. AGENT DEFINITION LIFECYCLE INTEGRITY
+-- ============================================================
+
+CREATE OR REPLACE FUNCTION
+raamaesha.enforce_agent_definition_lifecycle()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+
+    IF OLD.status = 'archived' THEN
+
+        IF NEW.status <> 'archived' THEN
+            RAISE EXCEPTION
+                'Archived agent definitions cannot change lifecycle status'
+                USING ERRCODE = '55000';
+        END IF;
+
+    ELSIF OLD.status = 'active' THEN
+
+        IF NEW.status NOT IN ('active', 'archived') THEN
+            RAISE EXCEPTION
+                'Active agent definitions may only remain active or transition to archived'
+                USING ERRCODE = '55000';
+        END IF;
+
+    END IF;
+
+    RETURN NEW;
+
+END;
+$$;
+
+
+CREATE TRIGGER trg_agent_definitions_lifecycle
+    BEFORE UPDATE
+    ON raamaesha.agent_definitions
+    FOR EACH ROW
+    EXECUTE FUNCTION
+        raamaesha.enforce_agent_definition_lifecycle();
+
+
+-- ============================================================
+-- 9. AGENT VERSION LIFECYCLE / IMMUTABILITY
+-- ============================================================
+
+CREATE OR REPLACE FUNCTION
+raamaesha.prevent_published_agent_version_mutation()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+
+    IF OLD.status IN ('published', 'retired') THEN
+
+        IF OLD.status = 'published'
+           AND NEW.status NOT IN ('published', 'retired')
+        THEN
+            RAISE EXCEPTION
+                'Published agent versions may only remain published or transition to retired'
+                USING ERRCODE = '55000';
+        END IF;
+
+
+        IF OLD.status = 'retired'
+           AND NEW.status <> 'retired'
+        THEN
+            RAISE EXCEPTION
+                'Retired agent versions cannot change lifecycle status'
+                USING ERRCODE = '55000';
+        END IF;
+
+
+        IF OLD.status IN ('published', 'retired')
+           AND (
+                OLD.agent_definition_id IS DISTINCT FROM
+                    NEW.agent_definition_id
+                OR OLD.version_number IS DISTINCT FROM
+                    NEW.version_number
+                OR OLD.description IS DISTINCT FROM
+                    NEW.description
+                OR OLD.configuration IS DISTINCT FROM
+                    NEW.configuration
+                OR OLD.published_at IS DISTINCT FROM
+                    NEW.published_at
+                OR OLD.created_by IS DISTINCT FROM
+                    NEW.created_by
+                OR OLD.created_at IS DISTINCT FROM
+                    NEW.created_at
+                OR OLD.deleted_at IS DISTINCT FROM
+                    NEW.deleted_at
+           )
+        THEN
+            RAISE EXCEPTION
+                'Published or retired agent versions are structurally immutable'
+                USING ERRCODE = '55000';
+        END IF;
+
+    END IF;
+
+    RETURN NEW;
+
+END;
+$$;
+
+
+CREATE TRIGGER trg_agent_versions_published_mutation
+    BEFORE UPDATE
+    ON raamaesha.agent_versions
+    FOR EACH ROW
+    EXECUTE FUNCTION
+        raamaesha.prevent_published_agent_version_mutation();
+
+
+-- ============================================================
+-- 10. AGENT VERSION DELETE PROTECTION
+-- ============================================================
+
+CREATE OR REPLACE FUNCTION
+raamaesha.prevent_published_agent_version_delete()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+
+    IF OLD.status IN ('published', 'retired') THEN
+        RAISE EXCEPTION
+            'Published or retired agent versions cannot be deleted'
+            USING ERRCODE = '55000';
+    END IF;
+
+    RETURN OLD;
+
+END;
+$$;
+
+
+CREATE TRIGGER trg_agent_versions_published_delete
+    BEFORE DELETE
+    ON raamaesha.agent_versions
+    FOR EACH ROW
+    EXECUTE FUNCTION
+        raamaesha.prevent_published_agent_version_delete();
+
+
+-- ============================================================
+-- 11. AGENT INSTANCE LIFECYCLE INTEGRITY
+-- ============================================================
+
+CREATE OR REPLACE FUNCTION
+raamaesha.enforce_agent_instance_lifecycle()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+
+    IF OLD.status = 'stopped' THEN
+
+        IF NEW.status <> 'stopped' THEN
+            RAISE EXCEPTION
+                'Stopped agent instances cannot change lifecycle status'
+                USING ERRCODE = '55000';
+        END IF;
+
+    ELSIF OLD.status = 'failed' THEN
+
+        IF NEW.status <> 'failed' THEN
+            RAISE EXCEPTION
+                'Failed agent instances cannot change lifecycle status'
+                USING ERRCODE = '55000';
+        END IF;
+
+    ELSIF OLD.status = 'pending' THEN
+
+        IF NEW.status NOT IN ('pending', 'active', 'failed') THEN
+            RAISE EXCEPTION
+                'Pending agent instances may transition only to active or failed'
+                USING ERRCODE = '55000';
+        END IF;
+
+    ELSIF OLD.status = 'active' THEN
+
+        IF NEW.status NOT IN (
+            'active',
+            'paused',
+            'stopped',
+            'failed'
+        ) THEN
+            RAISE EXCEPTION
+                'Active agent instances may transition only to active, paused, stopped, or failed'
+                USING ERRCODE = '55000';
+        END IF;
+
+    ELSIF OLD.status = 'paused' THEN
+
+        IF NEW.status NOT IN (
+            'paused',
+            'active',
+            'stopped',
+            'failed'
+        ) THEN
+            RAISE EXCEPTION
+                'Paused agent instances may transition only to paused, active, stopped, or failed'
+                USING ERRCODE = '55000';
+        END IF;
+
+    END IF;
+
+    RETURN NEW;
+
+END;
+$$;
+
+
+CREATE TRIGGER trg_agent_instances_lifecycle
+    BEFORE UPDATE
+    ON raamaesha.agent_instances
+    FOR EACH ROW
+    EXECUTE FUNCTION
+        raamaesha.enforce_agent_instance_lifecycle();
+
+
+-- ============================================================
+-- 12. AGENT DEFINITION UPDATED_AT
+-- ============================================================
+
+CREATE OR REPLACE FUNCTION
+raamaesha.set_agent_definition_updated_at()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    NEW.updated_at = CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$;
+
+
+CREATE TRIGGER trg_agent_definitions_updated_at
+    BEFORE UPDATE
+    ON raamaesha.agent_definitions
+    FOR EACH ROW
+    EXECUTE FUNCTION
+        raamaesha.set_agent_definition_updated_at();
+
+
+-- ============================================================
+-- 13. AGENT VERSION UPDATED_AT
+-- ============================================================
+
+CREATE OR REPLACE FUNCTION
+raamaesha.set_agent_version_updated_at()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    NEW.updated_at = CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$;
+
+
+CREATE TRIGGER trg_agent_versions_updated_at
+    BEFORE UPDATE
+    ON raamaesha.agent_versions
+    FOR EACH ROW
+    EXECUTE FUNCTION
+        raamaesha.set_agent_version_updated_at();
+
+
+-- ============================================================
+-- 14. AGENT INSTANCE UPDATED_AT
+-- ============================================================
+
+CREATE OR REPLACE FUNCTION
+raamaesha.set_agent_instance_updated_at()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    NEW.updated_at = CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$;
+
+
+CREATE TRIGGER trg_agent_instances_updated_at
+    BEFORE UPDATE
+    ON raamaesha.agent_instances
+    FOR EACH ROW
+    EXECUTE FUNCTION
+        raamaesha.set_agent_instance_updated_at();
+
+
+-- ============================================================
+-- 15. COMMENTS
+-- ============================================================
+
+COMMENT ON TABLE raamaesha.agent_definitions IS
+'Tenant-scoped logical AI agent definitions.';
+
+
+COMMENT ON TABLE raamaesha.agent_versions IS
+'Versioned and lifecycle-controlled configurations of AI agents.';
+
+
+COMMENT ON TABLE raamaesha.agent_instances IS
+'Runtime-scoped instances of configured AI agents.';
+
+
+COMMENT ON COLUMN raamaesha.agent_versions.configuration IS
+'Structured agent configuration stored as a JSON object.';
+
+
+COMMENT ON COLUMN raamaesha.agent_instances.context IS
+'Runtime agent context stored as a JSON object; durable agent memory is implemented separately.';
+
+
+-- ============================================================
+-- END OF MIGRATION 051
+-- ============================================================
+
+================================================================================
+FILE: 052_agent_capability_bindings.sql
+================================================================================
+
+-- =============================================================================
+-- RaamaEsha OS Founder Edition
+-- Migration : 052_agent_capability_bindings.sql
+-- Module    : Agent Capability Binding
+--
+-- Purpose:
+--   Creates the persistent binding layer between versioned AI agents and
+--   reusable platform capabilities.
+--
+-- Responsibilities:
+--   - Agent version to capability relationships
+--   - Binding lifecycle management
+--   - Non-secret binding configuration
+--   - Published agent-version composition integrity
+--   - Capability lifecycle integrity
+--   - Audit actor references
+--   - Soft deletion
+--   - Active capability discovery
+--
+-- Architecture:
+--
+--   Agent Definition
+--          |
+--          v
+--   Agent Version
+--          |
+--          v
+--   Agent Capability Binding
+--          |
+--          v
+--   Platform Capability
+--          |
+--          v
+--   Capability Operation Binding
+--          |
+--          v
+--   Integration Operation
+--          |
+--          v
+--   Integration
+--
+-- Design Principles:
+--   - Capabilities remain platform-level and reusable
+--   - Agents consume capabilities through explicit bindings
+--   - No duplicated tool registry
+--   - No authorization logic
+--   - No execution logic
+--   - No integration execution logic
+--   - No secrets
+--   - Published agent versions have immutable capability composition
+--   - Soft deletion supported
+--   - Audit actor references supported
+--   - Compatible with future Tool Gateway and Nandi AI runtime
+--
+-- Dependencies:
+--   - 001_extensions.sql
+--   - 003_schema_core.sql
+--   - 007_identity_actor.sql
+--   - 013_audit_infrastructure.sql
+--   - 022_capability_registry.sql
+--   - 051_agent_foundation.sql
+--
+-- PostgreSQL : 17+
+-- =============================================================================
+
+
+BEGIN;
+
+
+-- =============================================================================
+-- ENUM : Agent Capability Binding Status
+-- =============================================================================
+
+CREATE TYPE public.agent_capability_binding_status AS ENUM
+(
+    'draft',
+    'active',
+    'disabled',
+    'deprecated'
+);
+
+COMMENT ON TYPE public.agent_capability_binding_status IS
+'Lifecycle state of an agent-version capability binding.';
+
+
+-- =============================================================================
+-- Agent Capability Bindings
+-- =============================================================================
+--
+-- Represents one explicit capability assignment to one versioned AI agent.
+--
+-- Capabilities are platform-level reusable definitions. The binding therefore
+-- does not duplicate organization_id. Tenant context is inherited through the
+-- owning agent version and its agent definition.
+--
+-- Binding configuration contains non-secret runtime/discovery metadata only.
+-- Credentials, tokens, secrets, and execution payloads remain outside this
+-- table.
+-- =============================================================================
+
+CREATE TABLE raamaesha.agent_capability_bindings
+(
+    id
+        UUID
+        NOT NULL
+        DEFAULT gen_random_uuid(),
+
+    agent_version_id
+        UUID
+        NOT NULL,
+
+    capability_id
+        UUID
+        NOT NULL,
+
+    status
+        public.agent_capability_binding_status
+        NOT NULL
+        DEFAULT 'draft',
+
+    configuration
+        JSONB
+        NOT NULL
+        DEFAULT '{}'::JSONB,
+
+    created_at
+        TIMESTAMPTZ
+        NOT NULL
+        DEFAULT CURRENT_TIMESTAMP,
+
+    updated_at
+        TIMESTAMPTZ
+        NOT NULL
+        DEFAULT CURRENT_TIMESTAMP,
+
+    created_by
+        UUID,
+
+    updated_by
+        UUID,
+
+    deleted_at
+        TIMESTAMPTZ,
+
+
+    -- =========================================================================
+    -- Primary Key
+    -- =========================================================================
+
+    CONSTRAINT pk_agent_capability_bindings
+        PRIMARY KEY (id),
+
+
+    -- =========================================================================
+    -- Agent Version Relationship
+    -- =========================================================================
+
+    CONSTRAINT fk_agent_capability_bindings_agent_version
+        FOREIGN KEY (agent_version_id)
+        REFERENCES raamaesha.agent_versions(id)
+        ON UPDATE CASCADE
+        ON DELETE RESTRICT,
+
+
+    -- =========================================================================
+    -- Capability Relationship
+    -- =========================================================================
+
+    CONSTRAINT fk_agent_capability_bindings_capability
+        FOREIGN KEY (capability_id)
+        REFERENCES raamaesha.capabilities(id)
+        ON UPDATE CASCADE
+        ON DELETE RESTRICT,
+
+
+    -- =========================================================================
+    -- Audit Actor Relationships
+    -- =========================================================================
+
+    CONSTRAINT fk_agent_capability_bindings_created_by_actor
+        FOREIGN KEY (created_by)
+        REFERENCES raamaesha.actors(id)
+        ON UPDATE CASCADE
+        ON DELETE SET NULL,
+
+
+    CONSTRAINT fk_agent_capability_bindings_updated_by_actor
+        FOREIGN KEY (updated_by)
+        REFERENCES raamaesha.actors(id)
+        ON UPDATE CASCADE
+        ON DELETE SET NULL,
+
+
+    -- =========================================================================
+    -- Binding Identity
+    -- =========================================================================
+    --
+    -- Prevents duplicate current bindings. Historical soft-deleted bindings
+    -- are handled by the production partial unique index below.
+    -- =========================================================================
+
+
+
+    -- =========================================================================
+    -- Configuration Integrity
+    -- =========================================================================
+
+    CONSTRAINT ck_agent_capability_bindings_configuration_object
+        CHECK (
+            jsonb_typeof(configuration) = 'object'
+        )
+
+);
+
+
+-- =============================================================================
+-- Documentation
+-- =============================================================================
+
+COMMENT ON TABLE raamaesha.agent_capability_bindings IS
+'Explicit capability assignments for versioned RaamaEsha OS AI agents.';
+
+
+COMMENT ON COLUMN raamaesha.agent_capability_bindings.id IS
+'Globally unique identifier for the agent capability binding.';
+
+
+COMMENT ON COLUMN raamaesha.agent_capability_bindings.agent_version_id IS
+'Versioned agent that receives this capability binding.';
+
+
+COMMENT ON COLUMN raamaesha.agent_capability_bindings.capability_id IS
+'Reusable platform capability assigned to the agent version.';
+
+
+COMMENT ON COLUMN raamaesha.agent_capability_bindings.status IS
+'Lifecycle state of the agent capability binding.';
+
+
+COMMENT ON COLUMN raamaesha.agent_capability_bindings.configuration IS
+'Extensible non-secret binding configuration. Plaintext credentials, tokens, and secrets must not be stored here.';
+
+
+COMMENT ON COLUMN raamaesha.agent_capability_bindings.created_at IS
+'Timestamp when the agent capability binding was created.';
+
+
+COMMENT ON COLUMN raamaesha.agent_capability_bindings.updated_at IS
+'Timestamp when the agent capability binding was most recently updated.';
+
+
+COMMENT ON COLUMN raamaesha.agent_capability_bindings.created_by IS
+'Actor responsible for creating the binding when known.';
+
+
+COMMENT ON COLUMN raamaesha.agent_capability_bindings.updated_by IS
+'Actor responsible for the most recent binding update when known.';
+
+
+COMMENT ON COLUMN raamaesha.agent_capability_bindings.deleted_at IS
+'Soft deletion timestamp. NULL indicates that the binding has not been soft deleted.';
+
+
+-- =============================================================================
+-- Indexes
+-- =============================================================================
+
+CREATE INDEX idx_agent_capability_bindings_agent_version
+    ON raamaesha.agent_capability_bindings (agent_version_id);
+
+
+CREATE INDEX idx_agent_capability_bindings_capability
+    ON raamaesha.agent_capability_bindings (capability_id);
+
+
+CREATE INDEX idx_agent_capability_bindings_status
+    ON raamaesha.agent_capability_bindings (status);
+
+
+CREATE INDEX idx_agent_capability_bindings_deleted_at
+    ON raamaesha.agent_capability_bindings (deleted_at);
+
+
+-- =============================================================================
+-- Active Capability Discovery
+-- =============================================================================
+
+CREATE INDEX idx_agent_capability_bindings_active_discovery
+    ON raamaesha.agent_capability_bindings
+    (
+        agent_version_id,
+        capability_id
+    )
+    WHERE status = 'active'
+      AND deleted_at IS NULL;
+
+
+-- =============================================================================
+-- Production Integrity : One Current Binding
+-- =============================================================================
+--
+-- Ensures an agent version cannot have two current bindings to the same
+-- capability.
+-- =============================================================================
+
+CREATE UNIQUE INDEX ux_agent_capability_bindings_one_current
+    ON raamaesha.agent_capability_bindings
+    (
+        agent_version_id,
+        capability_id
+    )
+    WHERE deleted_at IS NULL;
+
+
+-- =============================================================================
+-- Lifecycle Function
+-- =============================================================================
+--
+-- Binding lifecycle:
+--
+--   draft     -> active
+--   draft     -> disabled
+--   active    -> disabled
+--   active    -> deprecated
+--   disabled  -> active
+--   disabled  -> deprecated
+--
+-- Deprecated is terminal.
+--
+-- A binding cannot become active unless its capability is currently active
+-- and not soft deleted.
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION raamaesha.enforce_agent_capability_binding_lifecycle()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    capability_current_status public.capability_status;
+    capability_deleted_at TIMESTAMPTZ;
+BEGIN
+
+    IF TG_OP = 'INSERT' THEN
+
+        IF NEW.status = 'active' THEN
+
+            SELECT
+                c.status,
+                c.deleted_at
+            INTO
+                capability_current_status,
+                capability_deleted_at
+            FROM raamaesha.capabilities AS c
+            WHERE c.id = NEW.capability_id;
+
+            IF capability_current_status IS DISTINCT FROM 'active'::public.capability_status
+               OR capability_deleted_at IS NOT NULL
+            THEN
+                RAISE EXCEPTION
+                    'Agent capability binding cannot be active unless capability % is active and not deleted',
+                    NEW.capability_id;
+            END IF;
+
+        END IF;
+
+        RETURN NEW;
+    END IF;
+
+
+    IF OLD.status = 'deprecated'
+       AND NEW.status IS DISTINCT FROM OLD.status
+    THEN
+        RAISE EXCEPTION
+            'Deprecated agent capability binding % cannot change lifecycle state',
+            OLD.id;
+    END IF;
+
+
+    IF OLD.status = 'draft'
+       AND NEW.status NOT IN
+           (
+               'draft',
+               'active',
+               'disabled'
+           )
+    THEN
+        RAISE EXCEPTION
+            'Invalid agent capability binding lifecycle transition from % to %',
+            OLD.status,
+            NEW.status;
+    END IF;
+
+
+    IF OLD.status = 'active'
+       AND NEW.status NOT IN
+           (
+               'active',
+               'disabled',
+               'deprecated'
+           )
+    THEN
+        RAISE EXCEPTION
+            'Invalid agent capability binding lifecycle transition from % to %',
+            OLD.status,
+            NEW.status;
+    END IF;
+
+
+    IF OLD.status = 'disabled'
+       AND NEW.status NOT IN
+           (
+               'disabled',
+               'active',
+               'deprecated'
+           )
+    THEN
+        RAISE EXCEPTION
+            'Invalid agent capability binding lifecycle transition from % to %',
+            OLD.status,
+            NEW.status;
+    END IF;
+
+
+    IF NEW.status = 'active'
+       AND (
+            NEW.capability_id IS DISTINCT FROM OLD.capability_id
+            OR OLD.status IS DISTINCT FROM 'active'::public.agent_capability_binding_status
+       )
+    THEN
+
+        SELECT
+            c.status,
+            c.deleted_at
+        INTO
+            capability_current_status,
+            capability_deleted_at
+        FROM raamaesha.capabilities AS c
+        WHERE c.id = NEW.capability_id;
+
+        IF capability_current_status IS DISTINCT FROM 'active'::public.capability_status
+           OR capability_deleted_at IS NOT NULL
+        THEN
+            RAISE EXCEPTION
+                'Agent capability binding cannot be active unless capability % is active and not deleted',
+                NEW.capability_id;
+        END IF;
+
+    END IF;
+
+
+    RETURN NEW;
+END;
+$$;
+
+
+COMMENT ON FUNCTION raamaesha.enforce_agent_capability_binding_lifecycle() IS
+'Enforces agent capability binding lifecycle transitions and requires active bindings to reference active, non-deleted capabilities.';
+
+
+-- =============================================================================
+-- Published Agent Version Protection
+-- =============================================================================
+--
+-- Once an agent version is published or retired, its capability composition
+-- becomes immutable.
+--
+-- Only non-structural audit fields may continue to change.
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION raamaesha.prevent_published_agent_capability_binding_mutation()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    agent_version_current_status public.agent_version_status;
+BEGIN
+
+    SELECT av.status
+    INTO agent_version_current_status
+    FROM raamaesha.agent_versions AS av
+    WHERE av.id = OLD.agent_version_id;
+
+    IF agent_version_current_status IN
+       (
+           'published'::public.agent_version_status,
+           'retired'::public.agent_version_status
+       )
+    THEN
+
+        IF NEW.agent_version_id IS DISTINCT FROM OLD.agent_version_id
+           OR NEW.capability_id IS DISTINCT FROM OLD.capability_id
+           OR NEW.status IS DISTINCT FROM OLD.status
+           OR NEW.configuration IS DISTINCT FROM OLD.configuration
+           OR NEW.deleted_at IS DISTINCT FROM OLD.deleted_at
+        THEN
+            RAISE EXCEPTION
+                'Capability binding % cannot be structurally modified because agent version % is %',
+                OLD.id,
+                OLD.agent_version_id,
+                agent_version_current_status;
+        END IF;
+
+    END IF;
+
+
+    RETURN NEW;
+END;
+$$;
+
+
+COMMENT ON FUNCTION raamaesha.prevent_published_agent_capability_binding_mutation() IS
+'Prevents structural mutation of capability bindings belonging to published or retired agent versions.';
+
+
+-- =============================================================================
+-- Published Agent Version Binding Insert Protection
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION raamaesha.prevent_published_agent_capability_binding_insert()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    agent_version_current_status public.agent_version_status;
+BEGIN
+
+    SELECT av.status
+    INTO agent_version_current_status
+    FROM raamaesha.agent_versions AS av
+    WHERE av.id = NEW.agent_version_id;
+
+    IF agent_version_current_status IN
+       (
+           'published'::public.agent_version_status,
+           'retired'::public.agent_version_status
+       )
+    THEN
+        RAISE EXCEPTION
+            'Capability binding cannot be added because agent version % is %',
+            NEW.agent_version_id,
+            agent_version_current_status
+            USING ERRCODE = '55000';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+COMMENT ON FUNCTION raamaesha.prevent_published_agent_capability_binding_insert() IS
+'Prevents adding capability bindings to published or retired agent versions.';
+
+-- =============================================================================
+-- Published Agent Version Binding Insert Trigger
+-- =============================================================================
+
+CREATE TRIGGER trg_agent_capability_bindings_published_insert
+BEFORE INSERT
+ON raamaesha.agent_capability_bindings
+FOR EACH ROW
+EXECUTE FUNCTION raamaesha.prevent_published_agent_capability_binding_insert();
+
+-- =============================================================================
+-- Published Agent Version Binding Delete Protection
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION raamaesha.prevent_published_agent_capability_binding_delete()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    agent_version_current_status public.agent_version_status;
+BEGIN
+
+    SELECT av.status
+    INTO agent_version_current_status
+    FROM raamaesha.agent_versions AS av
+    WHERE av.id = OLD.agent_version_id;
+
+    IF agent_version_current_status IN
+       (
+           'published'::public.agent_version_status,
+           'retired'::public.agent_version_status
+       )
+    THEN
+        RAISE EXCEPTION
+            'Capability binding % cannot be deleted because agent version % is %',
+            OLD.id,
+            OLD.agent_version_id,
+            agent_version_current_status;
+    END IF;
+
+    RETURN OLD;
+END;
+$$;
+
+
+COMMENT ON FUNCTION raamaesha.prevent_published_agent_capability_binding_delete() IS
+'Prevents deletion of capability bindings belonging to published or retired agent versions.';
+
+
+-- =============================================================================
+-- Updated At Trigger
+-- =============================================================================
+
+CREATE TRIGGER trg_agent_capability_bindings_set_updated_at
+BEFORE UPDATE
+ON raamaesha.agent_capability_bindings
+FOR EACH ROW
+EXECUTE FUNCTION raamaesha.set_updated_at();
+
+
+-- =============================================================================
+-- Lifecycle Trigger
+-- =============================================================================
+
+CREATE TRIGGER trg_agent_capability_bindings_lifecycle
+BEFORE INSERT OR UPDATE
+ON raamaesha.agent_capability_bindings
+FOR EACH ROW
+EXECUTE FUNCTION raamaesha.enforce_agent_capability_binding_lifecycle();
+
+
+-- =============================================================================
+-- Published Agent Version Mutation Protection
+-- =============================================================================
+
+CREATE TRIGGER trg_agent_capability_bindings_published_mutation
+BEFORE UPDATE
+ON raamaesha.agent_capability_bindings
+FOR EACH ROW
+EXECUTE FUNCTION raamaesha.prevent_published_agent_capability_binding_mutation();
+
+
+-- =============================================================================
+-- Published Agent Version Delete Protection
+-- =============================================================================
+
+CREATE TRIGGER trg_agent_capability_bindings_published_delete
+BEFORE DELETE
+ON raamaesha.agent_capability_bindings
+FOR EACH ROW
+EXECUTE FUNCTION raamaesha.prevent_published_agent_capability_binding_delete();
+
+
+-- =============================================================================
+-- Migration Complete
+-- =============================================================================
+
+COMMIT;
+
+================================================================================
+FILE: 053_agent_run_foundation.sql
+================================================================================
+
+-- =============================================================================
+-- RaamaEsha OS Founder Edition v1.0
+-- Migration : 053_agent_run_foundation.sql
+-- Module    : Agent Runtime
+--
+-- Purpose:
+--   Establish the durable foundation for agent invocation/run history.
+--
+-- Scope:
+--   1. Agent run identity
+--   2. Tenant ownership
+--   3. Agent instance/version integrity
+--   4. Agent run lifecycle
+--   5. Correlation support
+--   6. Runtime error metadata
+--   7. Audit integrity
+--   8. Historical execution preservation
+--
+-- Explicitly NOT included:
+--   - Agent memory
+--   - Agent conversations
+--   - Agent permissions
+--   - Capability execution
+--   - Integration execution
+--   - AI provider execution
+--   - Worker scheduling
+--   - Queue management
+--   - Retry orchestration
+--
+-- Architectural rule:
+--   Agent runs record durable runtime history.
+--   Actual execution remains outside PostgreSQL.
+-- =============================================================================
+
+BEGIN;
+
+-- =============================================================================
+-- ENUM : Agent Run Status
+-- =============================================================================
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_type
+        WHERE typname = 'agent_run_status'
+          AND typnamespace = 'public'::regnamespace
+    ) THEN
+        CREATE TYPE public.agent_run_status AS ENUM (
+            'pending',
+            'running',
+            'completed',
+            'failed',
+            'cancelled'
+        );
+    END IF;
+END
+$$;
+
+-- =============================================================================
+-- TABLE : Agent Runs
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS raamaesha.agent_runs
+(
+    id UUID NOT NULL DEFAULT gen_random_uuid(),
+
+    organization_id UUID NOT NULL,
+
+    agent_instance_id UUID NOT NULL,
+    agent_version_id UUID NOT NULL,
+
+    status public.agent_run_status NOT NULL
+        DEFAULT 'pending',
+
+    correlation_id UUID,
+
+    started_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
+
+    metadata JSONB NOT NULL
+        DEFAULT '{}'::jsonb,
+
+    error_code TEXT,
+    error_category TEXT,
+    error_message TEXT,
+
+    created_by UUID,
+    updated_by UUID,
+
+    created_at TIMESTAMPTZ NOT NULL
+        DEFAULT CURRENT_TIMESTAMP,
+
+    updated_at TIMESTAMPTZ NOT NULL
+        DEFAULT CURRENT_TIMESTAMP,
+
+    deleted_at TIMESTAMPTZ,
+
+    CONSTRAINT pk_agent_runs
+        PRIMARY KEY (id),
+
+    CONSTRAINT fk_agent_runs_organization
+        FOREIGN KEY (organization_id)
+        REFERENCES raamaesha.organizations(id)
+        ON UPDATE CASCADE
+        ON DELETE RESTRICT,
+
+
+    CONSTRAINT fk_agent_runs_instance_version
+        FOREIGN KEY (agent_instance_id, agent_version_id)
+        REFERENCES raamaesha.agent_instances(id, agent_version_id)
+        ON UPDATE CASCADE
+        ON DELETE RESTRICT,
+
+    CONSTRAINT fk_agent_runs_created_by_actor
+        FOREIGN KEY (created_by)
+        REFERENCES raamaesha.actors(id)
+        ON UPDATE CASCADE
+        ON DELETE SET NULL,
+
+    CONSTRAINT fk_agent_runs_updated_by_actor
+        FOREIGN KEY (updated_by)
+        REFERENCES raamaesha.actors(id)
+        ON UPDATE CASCADE
+        ON DELETE SET NULL,
+
+    CONSTRAINT ck_agent_runs_metadata_object
+        CHECK (
+            jsonb_typeof(metadata) = 'object'
+        ),
+
+    CONSTRAINT ck_agent_runs_error_consistency
+        CHECK (
+            status NOT IN ('failed')
+            OR error_message IS NOT NULL
+        ),
+
+    CONSTRAINT ck_agent_runs_lifecycle_timestamps
+        CHECK (
+            (
+                status = 'pending'
+                AND started_at IS NULL
+                AND completed_at IS NULL
+            )
+            OR
+            (
+                status = 'running'
+                AND started_at IS NOT NULL
+                AND completed_at IS NULL
+            )
+            OR
+            (
+                status IN ('completed', 'failed', 'cancelled')
+                AND started_at IS NOT NULL
+                AND completed_at IS NOT NULL
+            )
+        ),
+
+    CONSTRAINT ck_agent_runs_completion_after_start
+        CHECK (
+            completed_at IS NULL
+            OR started_at IS NULL
+            OR completed_at >= started_at
+        )
+);
+
+-- =============================================================================
+-- INDEXES
+-- =============================================================================
+
+CREATE INDEX IF NOT EXISTS idx_agent_runs_organization_id
+    ON raamaesha.agent_runs (organization_id);
+
+CREATE INDEX IF NOT EXISTS idx_agent_runs_agent_instance_id
+    ON raamaesha.agent_runs (agent_instance_id);
+
+CREATE INDEX IF NOT EXISTS idx_agent_runs_agent_version_id
+    ON raamaesha.agent_runs (agent_version_id);
+
+CREATE INDEX IF NOT EXISTS idx_agent_runs_status
+    ON raamaesha.agent_runs (status);
+
+CREATE INDEX IF NOT EXISTS idx_agent_runs_created_at
+    ON raamaesha.agent_runs (created_at);
+
+CREATE INDEX IF NOT EXISTS idx_agent_runs_deleted_at
+    ON raamaesha.agent_runs (deleted_at);
+
+CREATE INDEX IF NOT EXISTS idx_agent_runs_correlation_id
+    ON raamaesha.agent_runs (correlation_id)
+    WHERE correlation_id IS NOT NULL;
+
+-- =============================================================================
+-- FUNCTION : Agent Run Lifecycle Enforcement
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION raamaesha.enforce_agent_run_lifecycle()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF TG_OP = 'UPDATE' THEN
+
+        IF OLD.status IN (
+            'completed',
+            'failed',
+            'cancelled'
+        )
+        AND NEW.status IS DISTINCT FROM OLD.status THEN
+            RAISE EXCEPTION
+                'Agent run % is terminal and cannot change status from %',
+                OLD.id,
+                OLD.status;
+        END IF;
+
+        IF OLD.status = 'pending'
+           AND NEW.status NOT IN (
+               'pending',
+               'running'
+           ) THEN
+            RAISE EXCEPTION
+                'Invalid agent run lifecycle transition: pending -> %',
+                NEW.status;
+        END IF;
+
+        IF OLD.status = 'running'
+           AND NEW.status NOT IN (
+               'running',
+               'completed',
+               'failed',
+               'cancelled'
+           ) THEN
+            RAISE EXCEPTION
+                'Invalid agent run lifecycle transition: running -> %',
+                NEW.status;
+        END IF;
+
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+-- =============================================================================
+-- TRIGGER : Agent Run Lifecycle
+-- =============================================================================
+
+DROP TRIGGER IF EXISTS trg_agent_runs_lifecycle
+    ON raamaesha.agent_runs;
+
+CREATE TRIGGER trg_agent_runs_lifecycle
+    BEFORE INSERT OR UPDATE
+    ON raamaesha.agent_runs
+    FOR EACH ROW
+    EXECUTE FUNCTION raamaesha.enforce_agent_run_lifecycle();
+
+-- =============================================================================
+-- TRIGGER : Updated At
+-- =============================================================================
+
+DROP TRIGGER IF EXISTS trg_agent_runs_updated_at
+    ON raamaesha.agent_runs;
+
+CREATE TRIGGER trg_agent_runs_updated_at
+    BEFORE UPDATE
+    ON raamaesha.agent_runs
+    FOR EACH ROW
+    EXECUTE FUNCTION raamaesha.set_updated_at();
+
+-- =============================================================================
+-- COMMENTS
+-- =============================================================================
+
+COMMENT ON TABLE raamaesha.agent_runs IS
+    'Durable runtime invocation history for AI agent instances.';
+
+COMMENT ON COLUMN raamaesha.agent_runs.metadata IS
+    'Non-secret runtime metadata stored as a JSON object.';
+COMMENT ON COLUMN raamaesha.agent_runs.correlation_id IS
+    'Correlation identifier used to connect an agent run with surrounding runtime activity.';
+
+COMMENT ON COLUMN raamaesha.agent_runs.error_message IS
+    'Runtime failure description; sensitive secrets must never be stored here.';
+
+-- =============================================================================
+-- COMMIT
+-- =============================================================================
+
+COMMIT;
+
+================================================================================
+FILE: 054_agent_run_steps.sql
+================================================================================
+
+-- =============================================================================
+-- RaamaEsha OS Founder Edition v1.0
+-- Migration : 054_agent_run_steps.sql
+-- Module    : Agent Runtime
+--
+-- Purpose:
+--   Creates the durable execution-step model for agent runs.
+--
+-- Design:
+--   Migration 053 records the lifecycle of an agent run.
+--   Migration 054 records the ordered execution steps within that run.
+--
+-- Security:
+--   Runtime input/output/metadata/error fields are intended for non-secret
+--   operational data only. Secrets, credentials, API keys, and tokens must
+--   never be stored in this table.
+--
+-- Dependencies:
+--   053_agent_run_foundation.sql
+-- =============================================================================
+
+BEGIN;
+
+-- =============================================================================
+-- ENUM : agent_run_step_status
+-- =============================================================================
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_type
+        WHERE typname = 'agent_run_step_status'
+          AND typnamespace = 'public'::regnamespace
+    ) THEN
+        CREATE TYPE public.agent_run_step_status AS ENUM (
+            'pending',
+            'running',
+            'completed',
+            'failed',
+            'cancelled'
+        );
+    END IF;
+END
+$$;
+
+-- =============================================================================
+-- TABLE : agent_run_steps
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS raamaesha.agent_run_steps
+(
+    id UUID NOT NULL DEFAULT gen_random_uuid(),
+
+    organization_id UUID NOT NULL,
+
+    agent_run_id UUID NOT NULL,
+
+    sequence_no INTEGER NOT NULL,
+
+    step_type TEXT NOT NULL,
+
+    status public.agent_run_step_status NOT NULL DEFAULT 'pending',
+
+    name TEXT,
+
+    input JSONB NOT NULL DEFAULT '{}'::jsonb,
+
+    output JSONB NOT NULL DEFAULT '{}'::jsonb,
+
+    started_at TIMESTAMPTZ,
+
+    completed_at TIMESTAMPTZ,
+
+    error_code TEXT,
+
+    error_category TEXT,
+
+    error_message TEXT,
+
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+
+    created_by UUID,
+
+    updated_by UUID,
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    deleted_at TIMESTAMPTZ,
+
+    CONSTRAINT pk_agent_run_steps
+        PRIMARY KEY (id),
+
+    CONSTRAINT fk_agent_run_steps_organization
+        FOREIGN KEY (organization_id)
+        REFERENCES raamaesha.organizations(id)
+        ON UPDATE CASCADE
+        ON DELETE RESTRICT,
+
+    CONSTRAINT fk_agent_run_steps_run
+        FOREIGN KEY (agent_run_id)
+        REFERENCES raamaesha.agent_runs(id)
+        ON UPDATE CASCADE
+        ON DELETE RESTRICT,
+
+    CONSTRAINT fk_agent_run_steps_created_by_actor
+        FOREIGN KEY (created_by)
+        REFERENCES raamaesha.actors(id)
+        ON UPDATE CASCADE
+        ON DELETE SET NULL,
+
+    CONSTRAINT fk_agent_run_steps_updated_by_actor
+        FOREIGN KEY (updated_by)
+        REFERENCES raamaesha.actors(id)
+        ON UPDATE CASCADE
+        ON DELETE SET NULL,
+
+    CONSTRAINT ck_agent_run_steps_sequence_positive
+        CHECK (sequence_no > 0),
+
+    CONSTRAINT ck_agent_run_steps_type_not_blank
+        CHECK (btrim(step_type) <> ''),
+
+    CONSTRAINT ck_agent_run_steps_input_object
+        CHECK (jsonb_typeof(input) = 'object'),
+
+    CONSTRAINT ck_agent_run_steps_output_object
+        CHECK (jsonb_typeof(output) = 'object'),
+
+    CONSTRAINT ck_agent_run_steps_metadata_object
+        CHECK (jsonb_typeof(metadata) = 'object'),
+
+    CONSTRAINT ck_agent_run_steps_error_consistency
+        CHECK (
+            status <> 'failed'
+            OR error_message IS NOT NULL
+        ),
+
+    CONSTRAINT ck_agent_run_steps_lifecycle_timestamps
+        CHECK (
+            (
+                status = 'pending'
+                AND started_at IS NULL
+                AND completed_at IS NULL
+            )
+            OR
+            (
+                status = 'running'
+                AND started_at IS NOT NULL
+                AND completed_at IS NULL
+            )
+            OR
+            (
+                status IN ('completed', 'failed', 'cancelled')
+                AND started_at IS NOT NULL
+                AND completed_at IS NOT NULL
+            )
+        ),
+
+    CONSTRAINT ck_agent_run_steps_completion_after_start
+        CHECK (
+            completed_at IS NULL
+            OR started_at IS NULL
+            OR completed_at >= started_at
+        )
+);
+
+-- =============================================================================
+-- INDEXES
+-- =============================================================================
+
+CREATE INDEX IF NOT EXISTS idx_agent_run_steps_organization_id
+    ON raamaesha.agent_run_steps (organization_id);
+
+CREATE INDEX IF NOT EXISTS idx_agent_run_steps_agent_run_id
+    ON raamaesha.agent_run_steps (agent_run_id);
+
+CREATE INDEX IF NOT EXISTS idx_agent_run_steps_run_sequence
+    ON raamaesha.agent_run_steps (agent_run_id, sequence_no);
+
+CREATE INDEX IF NOT EXISTS idx_agent_run_steps_status
+    ON raamaesha.agent_run_steps (status);
+
+CREATE INDEX IF NOT EXISTS idx_agent_run_steps_created_at
+    ON raamaesha.agent_run_steps (created_at);
+
+CREATE INDEX IF NOT EXISTS idx_agent_run_steps_deleted_at
+    ON raamaesha.agent_run_steps (deleted_at);
+
+-- =============================================================================
+-- LIFECYCLE FUNCTION
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION raamaesha.enforce_agent_run_step_lifecycle()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF TG_OP = 'UPDATE' THEN
+
+        IF OLD.status IN (
+            'completed',
+            'failed',
+            'cancelled'
+        )
+        AND NEW.status IS DISTINCT FROM OLD.status THEN
+            RAISE EXCEPTION
+                'Agent run step % is terminal and cannot change status from %',
+                OLD.id,
+                OLD.status;
+        END IF;
+
+        IF OLD.status = 'pending'
+           AND NEW.status NOT IN (
+               'pending',
+               'running'
+           ) THEN
+            RAISE EXCEPTION
+                'Invalid agent run step lifecycle transition: pending -> %',
+                NEW.status;
+        END IF;
+
+        IF OLD.status = 'running'
+           AND NEW.status NOT IN (
+               'running',
+               'completed',
+               'failed',
+               'cancelled'
+           ) THEN
+            RAISE EXCEPTION
+                'Invalid agent run step lifecycle transition: running -> %',
+                NEW.status;
+        END IF;
+
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+-- =============================================================================
+-- TRIGGERS
+-- =============================================================================
+
+DROP TRIGGER IF EXISTS trg_agent_run_steps_lifecycle
+    ON raamaesha.agent_run_steps;
+
+CREATE TRIGGER trg_agent_run_steps_lifecycle
+    BEFORE INSERT OR UPDATE
+    ON raamaesha.agent_run_steps
+    FOR EACH ROW
+    EXECUTE FUNCTION raamaesha.enforce_agent_run_step_lifecycle();
+
+DROP TRIGGER IF EXISTS trg_agent_run_steps_updated_at
+    ON raamaesha.agent_run_steps;
+
+CREATE TRIGGER trg_agent_run_steps_updated_at
+    BEFORE UPDATE
+    ON raamaesha.agent_run_steps
+    FOR EACH ROW
+    EXECUTE FUNCTION raamaesha.set_updated_at();
+
+-- =============================================================================
+-- COMMENTS
+-- =============================================================================
+
+COMMENT ON TABLE raamaesha.agent_run_steps IS
+    'Durable ordered execution steps belonging to AI agent runs.';
+
+COMMENT ON COLUMN raamaesha.agent_run_steps.step_type IS
+    'Runtime step classification. Values are intentionally extensible and must not contain secrets.';
+
+COMMENT ON COLUMN raamaesha.agent_run_steps.input IS
+    'Non-secret runtime input represented as a JSON object.';
+
+COMMENT ON COLUMN raamaesha.agent_run_steps.output IS
+    'Non-secret runtime output represented as a JSON object.';
+
+COMMENT ON COLUMN raamaesha.agent_run_steps.metadata IS
+    'Non-secret runtime metadata stored as a JSON object.';
+
+COMMENT ON COLUMN raamaesha.agent_run_steps.error_message IS
+    'Runtime failure description; sensitive secrets must never be stored here.';
+
+COMMIT;
+
+================================================================================
+FILE: 055_agent_run_step_execution_binding.sql
+================================================================================
+
+-- =============================================================================
+-- RaamaEsha OS Founder Edition v1.0
+-- Migration : 055_agent_run_step_execution_binding.sql
+-- Module    : Agent Runtime / Integration Execution
+--
+-- Purpose:
+--   Establishes the durable relationship between an agent run step and the
+--   integration execution associated with that step.
+--
+-- Architecture:
+--
+--   Agent Run
+--       |
+--       v
+--   Agent Run Step
+--       |
+--       | integration_execution_id
+--       v
+--   Integration Execution
+--       |
+--       v
+--   Integration Operation
+--
+-- Design Principles:
+--   - Reuses the existing integration execution model from Migration 019
+--   - Does not create a duplicate execution model
+--   - One integration execution may belong to at most one agent run step
+--   - Agent run steps remain generic and are not coupled to capabilities
+--   - Execution lifecycle remains owned by integration_executions
+--   - Retry state remains owned by integration_executions
+--   - No secrets or request/response payloads are introduced
+--   - Runtime/application layer owns execution orchestration
+--
+-- Dependencies:
+--   - 019_integration_execution.sql
+--   - 053_agent_run_foundation.sql
+--   - 054_agent_run_steps.sql
+--
+-- PostgreSQL : 17+
+-- =============================================================================
+
+BEGIN;
+
+-- =============================================================================
+-- Add Integration Execution Relationship
+-- =============================================================================
+
+ALTER TABLE raamaesha.agent_run_steps
+    ADD COLUMN IF NOT EXISTS integration_execution_id UUID;
+
+-- =============================================================================
+-- Foreign Key
+-- =============================================================================
+--
+-- An agent run step may optionally reference the integration execution that
+-- it initiated or represents.
+--
+-- The relationship is optional because agent run steps are intentionally
+-- generic and may represent non-integration activities.
+-- =============================================================================
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'fk_agent_run_steps_integration_execution'
+          AND conrelid = 'raamaesha.agent_run_steps'::regclass
+    ) THEN
+        ALTER TABLE raamaesha.agent_run_steps
+            ADD CONSTRAINT fk_agent_run_steps_integration_execution
+            FOREIGN KEY (integration_execution_id)
+            REFERENCES raamaesha.integration_executions(id)
+            ON UPDATE CASCADE
+            ON DELETE RESTRICT;
+    END IF;
+END
+$$;
+
+-- =============================================================================
+-- Uniqueness
+-- =============================================================================
+--
+-- A single integration execution represents one logical execution and must
+-- not be attached to multiple agent run steps.
+--
+-- NULL values remain allowed because not every agent run step represents an
+-- integration execution.
+-- =============================================================================
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'uq_agent_run_steps_integration_execution'
+          AND conrelid = 'raamaesha.agent_run_steps'::regclass
+    ) THEN
+        ALTER TABLE raamaesha.agent_run_steps
+            ADD CONSTRAINT uq_agent_run_steps_integration_execution
+            UNIQUE (integration_execution_id);
+    END IF;
+END
+$$;
+
+-- =============================================================================
+-- Index
+-- =============================================================================
+--
+-- The UNIQUE constraint above already provides an index on
+-- integration_execution_id. No separate duplicate index is required.
+-- =============================================================================
+
+-- =============================================================================
+-- Documentation
+-- =============================================================================
+
+COMMENT ON COLUMN raamaesha.agent_run_steps.integration_execution_id IS
+'Optional reference to the integration execution associated with this agent run step. Execution lifecycle, retry state, and operational diagnostics remain owned by raamaesha.integration_executions.';
+
+COMMENT ON CONSTRAINT fk_agent_run_steps_integration_execution
+    ON raamaesha.agent_run_steps IS
+'Links an agent run step to its associated integration execution without duplicating execution state.';
+
+COMMENT ON CONSTRAINT uq_agent_run_steps_integration_execution
+    ON raamaesha.agent_run_steps IS
+'Ensures one logical integration execution is associated with at most one agent run step.';
+
+COMMIT;
+
+================================================================================
+FILE: 056_workflow_agent_invocations.sql
+================================================================================
+
+-- =============================================================================
+-- RaamaEsha OS Founder Edition v1.0
+-- Migration : 056_workflow_agent_invocations.sql
+-- Module    : Workflow <-> Agent Runtime Bridge
+--
+-- Purpose:
+--   Creates the durable relationship between a workflow step execution
+--   attempt and the agent run invoked by that attempt.
+--
+-- Architecture:
+--   Workflow Step Execution
+--          |
+--          v
+--   Workflow Agent Invocation
+--          |
+--          v
+--   Agent Run
+--
+-- Design principles:
+--   - Workflow runtime owns workflow execution semantics.
+--   - Agent Runtime owns agent execution lifecycle.
+--   - One workflow step execution attempt may invoke at most one agent run.
+--   - Agent Run owns runtime status and lifecycle.
+--   - Workflow retry semantics remain owned by workflow_step_executions.
+--   - Integration retry semantics remain owned by integration_executions.
+--   - No duplicate agent, capability, integration, execution, or retry state.
+--   - No secrets or request/response payloads are stored here.
+--   - Cross-tenant associations are explicitly enforced.
+--
+-- Dependencies:
+--   050_workflow_foundation.sql
+--   053_agent_run_foundation.sql
+--   054_agent_run_steps.sql
+--
+-- =============================================================================
+
+BEGIN;
+
+-- =============================================================================
+-- TABLE : workflow_agent_invocations
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS raamaesha.workflow_agent_invocations
+(
+    id UUID NOT NULL DEFAULT gen_random_uuid(),
+
+    workflow_step_execution_id UUID NOT NULL,
+    agent_run_id UUID NOT NULL,
+
+    correlation_id UUID,
+
+    created_by UUID,
+    updated_by UUID,
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMPTZ,
+
+    CONSTRAINT pk_workflow_agent_invocations
+        PRIMARY KEY (id),
+
+    CONSTRAINT fk_workflow_agent_invocations_step_execution
+        FOREIGN KEY (workflow_step_execution_id)
+        REFERENCES raamaesha.workflow_step_executions(id)
+        ON UPDATE CASCADE
+        ON DELETE RESTRICT,
+
+    CONSTRAINT fk_workflow_agent_invocations_agent_run
+        FOREIGN KEY (agent_run_id)
+        REFERENCES raamaesha.agent_runs(id)
+        ON UPDATE CASCADE
+        ON DELETE RESTRICT,
+
+    CONSTRAINT fk_workflow_agent_invocations_created_by_actor
+        FOREIGN KEY (created_by)
+        REFERENCES raamaesha.actors(id)
+        ON UPDATE CASCADE
+        ON DELETE SET NULL,
+
+    CONSTRAINT fk_workflow_agent_invocations_updated_by_actor
+        FOREIGN KEY (updated_by)
+        REFERENCES raamaesha.actors(id)
+        ON UPDATE CASCADE
+        ON DELETE SET NULL,
+
+    CONSTRAINT uq_workflow_agent_invocations_step_execution
+        UNIQUE (workflow_step_execution_id)
+);
+
+-- =============================================================================
+-- INDEXES
+-- =============================================================================
+
+CREATE INDEX IF NOT EXISTS ix_workflow_agent_invocations_agent_run
+    ON raamaesha.workflow_agent_invocations(agent_run_id);
+
+CREATE INDEX IF NOT EXISTS ix_workflow_agent_invocations_created_at
+    ON raamaesha.workflow_agent_invocations(created_at DESC);
+
+CREATE INDEX IF NOT EXISTS ix_workflow_agent_invocations_deleted_at
+    ON raamaesha.workflow_agent_invocations(deleted_at);
+
+CREATE INDEX IF NOT EXISTS ix_workflow_agent_invocations_correlation_id
+    ON raamaesha.workflow_agent_invocations(correlation_id)
+    WHERE correlation_id IS NOT NULL;
+
+-- =============================================================================
+-- TENANT INTEGRITY
+--
+-- Workflow step execution resolves to:
+--   workflow_instance.organization_id
+--
+-- Agent run directly owns:
+--   agent_runs.organization_id
+--
+-- These organizations must match.
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION
+raamaesha.enforce_workflow_agent_invocation_tenant_integrity()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    workflow_organization_id UUID;
+    agent_organization_id UUID;
+BEGIN
+    SELECT wi.organization_id
+      INTO workflow_organization_id
+      FROM raamaesha.workflow_step_executions AS wse
+      INNER JOIN raamaesha.workflow_instances AS wi
+              ON wi.id = wse.workflow_instance_id
+     WHERE wse.id = NEW.workflow_step_execution_id;
+
+    IF workflow_organization_id IS NULL THEN
+        RAISE EXCEPTION
+            'Workflow step execution % does not resolve to a valid organization',
+            NEW.workflow_step_execution_id
+            USING ERRCODE = '23503';
+    END IF;
+
+    SELECT ar.organization_id
+      INTO agent_organization_id
+      FROM raamaesha.agent_runs AS ar
+     WHERE ar.id = NEW.agent_run_id;
+
+    IF agent_organization_id IS NULL THEN
+        RAISE EXCEPTION
+            'Agent run % does not resolve to a valid organization',
+            NEW.agent_run_id
+            USING ERRCODE = '23503';
+    END IF;
+
+    IF workflow_organization_id IS DISTINCT FROM agent_organization_id THEN
+        RAISE EXCEPTION
+            'Workflow step execution % and agent run % belong to different organizations',
+            NEW.workflow_step_execution_id,
+            NEW.agent_run_id
+            USING ERRCODE = '23514';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_workflow_agent_invocations_tenant_integrity
+    ON raamaesha.workflow_agent_invocations;
+
+CREATE TRIGGER trg_workflow_agent_invocations_tenant_integrity
+    BEFORE INSERT OR UPDATE
+    ON raamaesha.workflow_agent_invocations
+    FOR EACH ROW
+    EXECUTE FUNCTION
+        raamaesha.enforce_workflow_agent_invocation_tenant_integrity();
+
+-- =============================================================================
+-- UPDATED_AT
+-- =============================================================================
+
+DROP TRIGGER IF EXISTS trg_workflow_agent_invocations_set_updated_at
+    ON raamaesha.workflow_agent_invocations;
+
+CREATE TRIGGER trg_workflow_agent_invocations_set_updated_at
+    BEFORE UPDATE
+    ON raamaesha.workflow_agent_invocations
+    FOR EACH ROW
+    EXECUTE FUNCTION raamaesha.set_updated_at();
+
+-- =============================================================================
+-- DOCUMENTATION
+-- =============================================================================
+
+COMMENT ON TABLE raamaesha.workflow_agent_invocations IS
+    'Durable bridge between a workflow step execution attempt and the agent run invoked by that attempt.';
+
+COMMENT ON COLUMN raamaesha.workflow_agent_invocations.workflow_step_execution_id IS
+    'Workflow step execution attempt associated with this agent invocation.';
+
+COMMENT ON COLUMN raamaesha.workflow_agent_invocations.agent_run_id IS
+    'Agent Runtime execution record invoked by the workflow step execution.';
+
+COMMENT ON COLUMN raamaesha.workflow_agent_invocations.correlation_id IS
+    'Optional cross-platform correlation identifier used for runtime tracing.';
+
+-- =============================================================================
+-- COMPLETE
+-- =============================================================================
+
+COMMIT;
+
+================================================================================
+FILE: 057_agent_runtime_tenant_integrity.sql
+================================================================================
+
+-- =============================================================================
+-- RaamaEsha OS Founder Edition
+-- Migration : 057_agent_runtime_tenant_integrity.sql
+-- Module    : Agent Runtime
+--
+-- Purpose:
+--   Enforces tenant ownership integrity across the Agent Runtime hierarchy.
+--
+-- Architecture:
+--   Organization
+--       |
+--       +-- Agent Instance
+--               |
+--               +-- Agent Run
+--                       |
+--                       +-- Agent Run Step
+--
+-- Responsibilities:
+--   - Prevent cross-tenant Agent Run / Agent Instance associations
+--   - Prevent cross-tenant Agent Run Step / Agent Run associations
+--   - Preserve Agent Instance / Agent Version integrity
+--   - Enforce tenant boundaries declaratively through composite foreign keys
+--
+-- Design Principles:
+--   - Prefer declarative PostgreSQL integrity over trigger-based enforcement
+--   - Do not duplicate runtime state
+--   - Preserve existing Agent Instance / Agent Version relationship
+--   - Preserve existing lifecycle semantics
+--   - No secrets or execution payloads are introduced
+--
+-- PostgreSQL : 17+
+-- =============================================================================
+
+BEGIN;
+
+-- =============================================================================
+-- 1. Agent Instance Tenant Identity
+-- =============================================================================
+--
+-- Creates a composite candidate key so Agent Runs can reference both the
+-- Agent Instance and its owning organization in one declarative constraint.
+--
+
+ALTER TABLE raamaesha.agent_instances
+    ADD CONSTRAINT uq_agent_instances_id_organization
+    UNIQUE (id, organization_id);
+
+-- =============================================================================
+-- 2. Agent Run Tenant Integrity
+-- =============================================================================
+--
+-- Replaces the tenant-blind Agent Instance reference with an additional
+-- composite foreign key that requires the Agent Run organization to match
+-- the Agent Instance organization.
+--
+
+ALTER TABLE raamaesha.agent_runs
+    ADD CONSTRAINT fk_agent_runs_agent_instance_organization
+    FOREIGN KEY (agent_instance_id, organization_id)
+    REFERENCES raamaesha.agent_instances(id, organization_id)
+    ON UPDATE CASCADE
+    ON DELETE RESTRICT;
+
+-- =============================================================================
+-- 3. Agent Run Tenant Identity
+-- =============================================================================
+--
+-- Creates a composite candidate key so Agent Run Steps can reference both
+-- the Agent Run and its owning organization in one declarative constraint.
+--
+
+ALTER TABLE raamaesha.agent_runs
+    ADD CONSTRAINT uq_agent_runs_id_organization
+    UNIQUE (id, organization_id);
+
+-- =============================================================================
+-- 4. Replace Tenant-Blind Agent Run Step Reference
+-- =============================================================================
+--
+-- The existing Agent Run foreign key guarantees that the referenced run
+-- exists, but does not guarantee that both records belong to the same
+-- organization.
+--
+-- Replace it with the tenant-aware composite foreign key.
+--
+
+ALTER TABLE raamaesha.agent_run_steps
+    DROP CONSTRAINT fk_agent_run_steps_run;
+
+ALTER TABLE raamaesha.agent_run_steps
+    ADD CONSTRAINT fk_agent_run_steps_run_organization
+    FOREIGN KEY (agent_run_id, organization_id)
+    REFERENCES raamaesha.agent_runs(id, organization_id)
+    ON UPDATE CASCADE
+    ON DELETE RESTRICT;
+
+COMMIT;
+
+-- =============================================================================
+-- End of Migration 057
+-- =============================================================================
