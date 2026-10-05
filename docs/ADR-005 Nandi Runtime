@@ -1,0 +1,1188 @@
+# ADR-005 - Nandi Runtime
+
+**Owner:** RaamaEsha Technologies
+**Product:** RaamaEsha OS Founder Edition
+**Status:** Proposed - Architecture Review Required
+**Decision Type:** Runtime Architecture
+**Scope:** Nandi Runtime, Governance, Capability Execution, AI Execution, Event Integration
+
+---
+## 1. Decision Summary
+
+Nandi Runtime is the Layer 2 Platform Core of RaamaEsha OS.
+
+Nandi is responsible for runtime orchestration, invocation lifecycle, governance coordination, capability execution coordination, AI execution coordination, and meaningful runtime event production.
+
+Nandi Runtime must integrate with the existing RaamaEsha Event Platform.
+
+The existing event occurrence store remains:
+
+```text
+raamaesha.events
+```
+
+Runtime state remains authoritative.
+
+Nandi events represent meaningful runtime occurrences and do not replace the underlying authoritative state.
+
+---
+
+## 2. Architectural Position
+
+Nandi Runtime is a platform-core runtime component.
+
+It coordinates execution across the RaamaEsha OS runtime boundary while preserving the authority of the underlying platform foundations.
+
+Nandi does not become the system of record for governance, capability definitions, execution state, AI provider configuration, usage accounting, or event history.
+
+The runtime follows this architectural principle:
+
+```text
+Authoritative Platform State
+          v
+Nandi Runtime Coordination
+          v
+Meaningful Runtime Occurrence
+          v
+Existing Event Platform
+```
+
+Nandi therefore acts as a runtime coordinator and producer of meaningful runtime events, not as a replacement for the platform foundations.
+
+---
+
+## 3. Core Responsibilities
+
+Nandi Runtime is responsible for:
+
+* receiving and validating runtime invocations,
+* establishing invocation context,
+* preserving organization and actor context,
+* coordinating governance evaluation,
+* respecting governance outcomes,
+* coordinating capability execution through the Capability Gateway,
+* coordinating AI execution through the approved AI execution boundary,
+* maintaining runtime lifecycle semantics,
+* producing meaningful runtime events through an explicit event producer,
+* preserving correlation across related runtime operations,
+* preventing unauthorized cross-tenant execution,
+* returning structured runtime outcomes,
+* maintaining clear boundaries between runtime coordination and authoritative persistence.
+
+Nandi Runtime must not silently acquire authority that belongs to another platform foundation.
+
+The runtime must operate through explicit contracts so that execution behavior remains testable, auditable, and replaceable.
+
+---
+
+## 4. Explicit Non-Responsibilities
+
+Nandi Runtime does not:
+
+* replace authoritative state tables,
+* become a second governance authority,
+* bypass the Capability Gateway,
+* replace AI execution state,
+* create a parallel event platform,
+* create a telemetry database,
+* create a generic logging system,
+* become the usage/cost ledger,
+* store credentials or secrets,
+* store hidden chain-of-thought,
+* modify locked migrations,
+* create Migration 075 without a concrete approved requirement.
+
+---
+
+
+## 5. Canonical Runtime Flow
+
+The intended high-level flow is:
+
+```text
+Caller
+  |
+  v
+Nandi Runtime
+  |
+  v
+Invocation Context
+  |
+  v
+Governance Evaluation
+  |
+  +-- deny -----------------> Rejected
+  |
+  +-- human approval -------> Pending Approval
+  |
+  v
+Capability Gateway
+  |
+  v
+Capability / Operation
+  |
+  v
+AI Execution where required
+  |
+  v
+Runtime Outcome
+  |
+  v
+Meaningful Runtime Events
+```
+
+Governance remains authoritative over whether execution may proceed.
+
+Capability execution remains bounded by the Capability Gateway.
+
+---
+
+## 6. Invocation Contract
+
+Every Nandi invocation must have a stable invocation identifier.
+
+The invocation context should establish, where applicable:
+
+```text
+invocation_id
+organization_id
+actor_id
+correlation_id
+capability reference
+operation reference
+input
+```
+
+The invocation identifier must correspond to the authoritative invocation record where persistence is implemented.
+
+Runtime event payloads must reference authoritative identifiers rather than inventing parallel identity systems.
+
+---
+
+## 7. Actor and Organization Context
+
+Organization and actor context are first-class runtime requirements.
+
+The runtime must establish:
+
+```text
+organization_id
+actor_id
+```
+
+before performing tenant-sensitive operations.
+
+The runtime must not trust arbitrary organization identifiers supplied independently from authoritative execution context.
+
+Actor selection must follow the approved actor model.
+
+A system actor must not be fabricated merely to satisfy a database field.
+
+The final system-actor strategy must be established before production event persistence is enabled.
+
+---
+
+## 8. Tenant Isolation
+
+Every Nandi runtime operation must remain within its organization boundary.
+
+The fundamental invariant is:
+
+```text
+runtime entity.organization_id
+        =
+event.organization_id
+```
+
+Where multiple runtime entities are referenced by an event, they must belong to the same organization unless an explicitly approved cross-organization architecture exists.
+
+Cross-tenant execution and cross-tenant event emission are prohibited.
+
+---
+
+## 9. Correlation
+
+Nandi must use the existing correlation mechanism for cross-operation traceability.
+
+A typical runtime chain may be:
+
+```text
+correlation_id
+     |
+     +-- invocation
+     +-- governance decision
+     +-- dispatch
+     +-- agent run
+     +-- run step
+     +-- AI execution
+```
+
+Nandi must not introduce a second generic correlation mechanism without architecture approval.
+
+---
+
+## 10. Governance Boundary
+
+Governance remains an authoritative decision boundary.
+
+Nandi may request or evaluate governance through the approved governance foundation, but runtime code must not bypass governance.
+
+A governance decision may be:
+
+```text
+allow
+deny
+require_human_approval
+```
+
+The governance decision remains authoritative according to the governance architecture.
+
+A governance event is an observation of a governance decision.
+
+It is not itself authorization.
+
+The runtime must not:
+
+* override a deny decision,
+* treat an event as authorization,
+* bypass required approval,
+* create a second decision authority,
+* execute a capability before required governance is satisfied.
+
+---
+
+## 11. Capability Execution Boundary
+
+Nandi Runtime must use the existing Capability Gateway foundation when executing registered capabilities.
+
+Migration 072 establishes the Capability Gateway foundation.
+
+The intended relationship is:
+
+```text
+Nandi Runtime
+      |
+      v
+Capability Gateway
+      |
+      v
+Registered Capability
+      |
+      v
+Authorized Operation
+```
+
+The runtime must not bypass established capability authorization or directly execute arbitrary operations outside the gateway boundary.
+
+The Capability Gateway remains the architectural boundary for capability execution.
+
+---
+
+## 12. AI Execution Boundary
+
+Nandi Runtime may coordinate AI execution through the existing AI Execution foundation.
+
+The intended relationship is:
+
+```text
+Nandi Runtime
+      |
+      v
+AI Execution Foundation
+      |
+      v
+AI Provider / Model
+```
+
+AI execution state remains authoritative in the existing AI execution foundation.
+
+Nandi runtime events may describe AI execution lifecycle occurrences, but events do not replace AI execution state.
+
+Nandi must not use runtime events as a substitute for provider configuration, model configuration, model selection, governance, or usage accounting.
+
+---
+## 13. Existing Event Platform
+
+RaamaEsha OS already contains an Event Platform.
+
+The conceptual platform flow is:
+
+```text
+Event Occurrence
+      |
+      v
+raamaesha.events
+      |
+      v
+Event Subscription
+      |
+      v
+Event Delivery
+      |
+      v
+Consumer
+```
+
+Nandi must integrate with this existing platform.
+
+The existing Event Platform remains responsible for event occurrence storage, subscriptions, delivery, and delivery lifecycle according to its established architecture.
+
+Nandi must not recreate these responsibilities.
+
+---
+
+## 14. Event State Authority
+
+Nandi state tables remain authoritative for runtime state.
+
+Examples include:
+
+```text
+agent_invocations
+agent_runs
+agent_run_steps
+agent_invocation_governance_decisions
+agent_invocation_execution_dispatches
+ai_executions
+```
+
+An event represents an occurrence.
+
+It does not replace the state that caused the occurrence.
+
+For example:
+
+```text
+agent_runs.status = completed
+        |
+        v
+Authoritative runtime state
+
+nandi.agent_run.completed
+        |
+        v
+Observation of the occurrence
+```
+
+If an event consumer is unavailable, the underlying runtime state remains authoritative.
+
+---
+
+## 15. Meaningful Event Principle
+
+Nandi must not emit an event for every database mutation.
+
+Events should represent meaningful runtime occurrences that another component may reasonably need to observe, react to, audit, or integrate with.
+
+Examples include:
+
+```text
+invocation started
+invocation completed
+invocation failed
+governance decision finalized
+dispatch accepted
+dispatch failed
+agent run started
+agent run completed
+agent run failed
+```
+
+Routine database updates with no externally meaningful consequence should not automatically become events.
+
+---
+
+## 16. Event Producer
+
+Nandi runtime events must have an explicit producer.
+
+The producer is responsible for determining that a meaningful runtime occurrence has happened and publishing the corresponding event.
+
+The preferred architecture is:
+
+```text
+Nandi Runtime
+      |
+      | authoritative state transition
+      v
+Runtime Event Producer
+      |
+      | event emission
+      v
+raamaesha.events
+```
+
+The event producer is responsible for:
+
+1. Selecting the correct event type.
+2. Supplying the correct organization.
+3. Supplying the correct actor.
+4. Supplying the occurrence timestamp.
+5. Preserving correlation information.
+6. Supplying the appropriate entity identifier.
+7. Producing a valid payload.
+8. Preventing sensitive information from entering the event.
+9. Preventing hidden chain-of-thought from entering the event.
+10. Maintaining event-version compatibility.
+11. Supporting the approved duplicate/idempotency strategy.
+12. Preserving the relationship between runtime state and event occurrence.
+
+---
+
+## 17. Event Naming Convention
+
+Nandi runtime events use:
+
+```text
+nandi.<domain>.<occurrence>
+```
+
+Examples:
+
+```text
+nandi.invocation.started
+nandi.invocation.completed
+nandi.invocation.failed
+
+nandi.governance.decided
+
+nandi.dispatch.accepted
+nandi.dispatch.failed
+
+nandi.agent_run.started
+nandi.agent_run.completed
+nandi.agent_run.failed
+
+nandi.agent_run_step.started
+nandi.agent_run_step.completed
+nandi.agent_run_step.failed
+
+nandi.ai_execution.started
+nandi.ai_execution.completed
+nandi.ai_execution.failed
+```
+
+Event names are descriptive identifiers.
+
+They do not themselves represent database tables, functions, or capabilities.
+
+---
+
+## 18. Event Envelope
+
+Every Nandi event written to the existing Event Platform must conform to the existing platform event structure.
+
+The platform-level record contains:
+
+```text
+id
+organization_id
+actor_id
+event_type
+occurred_at
+correlation_id
+payload
+created_at
+```
+
+Nandi-specific information belongs inside the event payload.
+
+Nandi must not create another generic envelope or event-occurrence table.
+
+---
+
+## 19. Nandi Event Payload
+
+The proposed Nandi payload contract is:
+
+```json
+{
+  "event_version": 1,
+  "source": "nandi_runtime",
+  "entity_type": "agent_run",
+  "entity_id": "UUID",
+  "references": {
+    "invocation_id": "UUID",
+    "run_id": "UUID",
+    "step_id": "UUID",
+    "execution_id": "UUID"
+  },
+  "metadata": {}
+}
+```
+
+Not every reference is required for every event.
+
+Null or inapplicable identifiers must not be fabricated.
+
+The primary entity identifier must correspond to an authoritative runtime record.
+
+---
+
+## 20. Event Versioning
+
+Every Nandi event payload must contain:
+
+```text
+event_version
+```
+
+The initial version is:
+
+```text
+1
+```
+
+Event versions allow payload contracts to evolve without silently breaking consumers.
+
+A breaking payload change requires an explicit version strategy.
+
+Existing consumers must not be silently broken by a payload change.
+
+---
+
+## 21. Entity Identification
+
+Each event must identify the primary runtime entity responsible for the occurrence.
+
+Examples:
+
+```text
+entity_type = agent_invocation
+entity_id   = agent_invocation.id
+```
+
+or:
+
+```text
+entity_type = agent_run
+entity_id   = agent_run.id
+```
+
+or:
+
+```text
+entity_type = agent_run_step
+entity_id   = agent_run_step.id
+```
+
+The entity identifier must correspond to an authoritative existing record.
+
+---
+
+## 22. Event Ordering
+
+Consumers must not assume globally ordered Nandi events.
+
+Ordering may be interpreted within a defined runtime context.
+
+Where ordering matters, consumers should use authoritative identifiers, timestamps, and domain-specific sequence information.
+
+For example, `agent_run_steps.sequence_no` remains authoritative for run-step ordering.
+
+Events must not replace that field.
+
+---
+
+## 23. Duplicate Handling
+
+Consumers must be designed with duplicate delivery in mind.
+
+The existence of an event occurrence does not guarantee exactly-once consumer processing.
+
+Where producer or consumer idempotency is required, the implementation must define an explicit idempotency strategy.
+
+Nandi must not assume:
+
+```text
+one event = one consumer execution
+```
+
+---
+## 24. Reliability Boundary
+
+The event contract does not yet select a final persistence or delivery reliability architecture.
+
+Possible future mechanisms include:
+
+```text
+state transition + event insert
+```
+
+within one transaction, or:
+
+```text
+state transaction
+      |
+      v
+durable publication mechanism
+      |
+      v
+event emission
+```
+
+or another explicitly approved reliable publisher.
+
+No outbox table, queue, worker, or persistence adapter is authorized by this ADR.
+
+The final mechanism must be selected after the concrete runtime persistence architecture is established.
+
+---
+
+## 25. Event Publication Failure
+
+Event publication failure must not silently corrupt authoritative runtime state.
+
+### Before execution
+
+If the required invocation-start event cannot be published before execution begins, the runtime must not proceed with capability execution unless an approved alternative reliability mechanism exists.
+
+The runtime should return a structured failure such as:
+
+```text
+EVENT_PUBLICATION_FAILED
+```
+
+### After execution
+
+If the runtime operation has already completed and publication of a terminal event fails, the runtime result must not be incorrectly changed solely because the observation event could not be published.
+
+The final persistence and retry mechanism remains an implementation decision.
+
+The runtime must never retry the underlying business capability merely because event publication failed.
+
+---
+
+## 26. Database Boundary
+
+The database remains responsible for persistence integrity and established platform constraints.
+
+The database may enforce:
+
+* organization relationships,
+* actor relationships,
+* foreign keys,
+* event immutability,
+* existing subscription relationships,
+* existing delivery relationships.
+
+The database should not become a hidden Nandi runtime.
+
+Runtime orchestration belongs to the application/runtime layer.
+
+---
+
+## 27. Database Trigger Policy
+
+Generic database triggers on every Nandi lifecycle mutation are not approved by this ADR.
+
+The following pattern is not automatically approved:
+
+```text
+agent_invocations UPDATE
+        |
+        v
+INSERT INTO events
+```
+
+or:
+
+```text
+agent_runs UPDATE
+        |
+        v
+INSERT INTO events
+```
+
+or:
+
+```text
+agent_run_steps UPDATE
+        |
+        v
+INSERT INTO events
+```
+
+Such triggers could:
+
+* couple state persistence to event publication,
+* make event semantics implicit,
+* create unwanted event volume,
+* complicate failure handling,
+* make application behavior harder to reason about.
+
+Any future database trigger for Nandi event production requires separate architecture review.
+
+---
+
+## 28. No Parallel Event Infrastructure
+
+Nandi must use:
+
+```text
+raamaesha.events
+```
+
+as the existing event-occurrence store.
+
+The following types of parallel infrastructure are explicitly prohibited unless a future architecture review establishes a concrete requirement:
+
+```text
+nandi_events
+nandi_runtime_events
+nandi_telemetry
+nandi_runtime_telemetry
+agent_runtime_events
+```
+
+Nandi must not create a second generic event-occurrence source of truth.
+
+---
+
+## 29. Capability Events Relationship
+
+`capability_events` and `raamaesha.events` represent different architectural concepts.
+
+Conceptually:
+
+```text
+capability_events
+        |
+        v
+"What event interface exists?"
+
+raamaesha.events
+        |
+        v
+"What event occurrence happened?"
+```
+
+`capability_events` remains the capability event interface/contract concept.
+
+`raamaesha.events` remains the event occurrence store.
+
+The exact registration of Nandi runtime events within the capability event architecture requires separate review.
+
+No fake capability-event records should be inserted merely to satisfy this ADR.
+
+---
+
+## 30. Workflow Integration
+
+The existing workflow foundation may consume Nandi runtime events as triggers.
+
+A future flow may be:
+
+```text
+Nandi Runtime
+      |
+      v
+nandi.agent_run.completed
+      |
+      v
+raamaesha.events
+      |
+      v
+Workflow Trigger
+      |
+      v
+Workflow Instance
+```
+
+The event does not execute the workflow.
+
+The workflow platform remains responsible for workflow execution.
+
+Nandi must not embed workflow execution inside the event producer.
+
+---
+
+## 31. Dispatch Integration
+
+Execution dispatch remains authoritative through the existing dispatch foundation.
+
+For example:
+
+```text
+nandi.dispatch.accepted
+```
+
+means that a dispatch occurrence was accepted.
+
+It does not necessarily mean that the underlying business operation has completed successfully.
+
+Consumers must distinguish:
+
+```text
+dispatch accepted
+```
+
+from:
+
+```text
+execution completed
+```
+
+The authoritative dispatch state remains in the existing dispatch foundation.
+
+---
+## 32. Sensitive Data
+
+Nandi event payloads must follow data-minimization principles.
+
+Payloads should contain identifiers and structured metadata rather than unnecessary raw business data.
+
+The event producer must not place credentials, secrets, tokens, passwords, private keys, or authentication material into event payloads.
+
+Prohibited examples include:
+
+```text
+API keys
+access tokens
+refresh tokens
+passwords
+provider secrets
+database credentials
+private keys
+```
+
+The event producer is responsible for validating payload content before publication.
+
+---
+
+## 33. AI Data Boundary
+
+AI-related Nandi events must never contain hidden chain-of-thought or private internal reasoning.
+
+Events may contain safe execution metadata such as:
+
+```text
+model reference
+provider reference
+execution identifier
+status
+error code
+duration reference
+```
+
+subject to applicable security and privacy policies.
+
+Raw prompts, model outputs, or other potentially sensitive AI content must only be included when an explicit approved data contract authorizes it.
+
+---
+
+## 34. Error Handling
+
+Failure events should provide structured error information without exposing secrets or sensitive infrastructure information.
+
+A failure event may contain:
+
+```text
+error_code
+error_category
+safe_error_message
+```
+
+It should not expose:
+
+```text
+credentials
+authentication tokens
+private configuration
+hidden reasoning
+sensitive infrastructure details
+```
+
+The authoritative runtime state remains the source of truth for the complete error record.
+
+The event payload is an integration-safe representation of the failure occurrence.
+
+---
+
+## 35. Usage and Cost Boundary
+
+Usage and cost accounting are intentionally outside this ADR.
+
+The future usage/cost architecture is expected to be addressed separately.
+
+Nandi runtime events must not become the primary usage or cost ledger.
+
+An event may eventually contain safe references useful for usage processing, but the event itself must not become the accounting authority.
+
+Usage and cost records must remain authoritative within their dedicated architecture.
+
+---
+
+## 36. Observability Boundary
+
+Runtime events may provide useful inputs to future observability systems.
+
+However:
+
+```text
+Events != Metrics
+Events != Logs
+Events != Traces
+```
+
+A future observability architecture may consume Nandi events while maintaining separate metric, log, or trace representations.
+
+This ADR does not create a metrics system, logging system, tracing system, or telemetry store.
+
+---
+
+## 37. Audit Boundary
+
+Nandi events may provide immutable historical observations of meaningful runtime occurrences.
+
+They do not replace audit columns or dedicated audit records where those are required.
+
+For example:
+
+```text
+created_at
+updated_at
+created_by
+updated_by
+```
+
+remain part of authoritative state models.
+
+The event platform provides occurrence history for meaningful runtime events.
+
+---
+
+## 38. Security Requirements
+
+Nandi event emission must enforce:
+
+1. Organization ownership.
+2. Actor validity.
+3. Payload validation.
+4. Data minimization.
+5. No secrets.
+6. No hidden chain-of-thought.
+7. No cross-tenant references.
+8. No unauthorized event injection.
+9. Immutable event occurrence after persistence.
+
+Security failures must fail safely.
+
+A security failure must not be converted into a successful event merely to satisfy downstream consumers.
+
+---
+
+## 39. Migration Authority
+
+Existing migrations remain authoritative for their established responsibilities.
+
+In particular, Nandi runtime implementation must preserve the authority boundaries of:
+
+```text
+063 - Governance Decision Foundation
+064 - Execution Dispatch Foundation
+068 - AI Execution Foundation
+072 - Capability Gateway Foundation
+073 - Governance Expansion / Evidence
+074 - Governance Binding Tenant Integrity
+```
+
+Migration 018 remains locked and must not be modified as part of Nandi event implementation.
+
+Nandi event architecture must not retroactively alter the responsibilities of completed migrations.
+
+---
+
+## 40. Migration 075 Decision
+
+Migration 075 is intentionally deferred.
+
+Migration 075 may only be designed after the runtime event producer and emission architecture establish a concrete database requirement.
+
+Before creating Migration 075, the following questions must be answered:
+
+1. What concrete database capability is missing?
+2. Can the requirement be fulfilled entirely by the Nandi runtime/application layer?
+3. Does an existing table, function, or constraint already provide the required capability?
+4. Does the requirement require a new database object?
+5. Does that object belong architecturally in the database foundation?
+6. Does it duplicate an existing Event Platform capability?
+7. Does it introduce a new source of truth?
+8. Does it preserve organization and tenant integrity?
+9. Does it preserve event immutability?
+10. Does it preserve the authority boundaries of existing migrations?
+
+Only after these questions are answered should Migration 075 be designed.
+
+This ADR does not authorize Migration 075.
+
+---
+
+## 41. Current Implementation
+
+The current Nandi Runtime implementation contains an explicit runtime event producer interface and event contracts.
+
+The producer interface is intentionally separated from the persistence implementation.
+
+The current implementation does not establish a production Event Platform adapter.
+
+There is currently no approved Nandi-specific event persistence adapter, outbox table, queue, worker, or telemetry database authorized by this ADR.
+
+This separation is intentional.
+
+The runtime contract can therefore be reviewed before committing to a database persistence mechanism.
+
+---
+
+## 42. Initial Runtime Reliability Contract
+
+The current runtime behavior establishes the following initial reliability intent:
+
+1. A required start-event publication failure before execution prevents capability execution.
+2. A terminal event publication failure after execution does not rewrite the actual runtime outcome.
+3. Event publication failure must not cause the underlying capability to execute a second time.
+4. The final transactional and durable publication strategy remains unresolved.
+5. The final strategy must be established before production event persistence is enabled.
+
+These behaviors are subject to refinement when the concrete persistence architecture is implemented.
+
+---
+
+## 43. Testing Requirements
+
+Before production event emission is enabled, testing must verify at minimum:
+
+### Tenant integrity
+
+```text
+same-tenant runtime entity -> event accepted
+cross-tenant runtime entity -> event rejected
+```
+
+### Event validity
+
+```text
+valid event -> persisted
+invalid event -> rejected
+```
+
+### Immutability
+
+```text
+UPDATE event -> rejected
+DELETE event -> rejected
+```
+
+### Correlation
+
+```text
+same runtime chain -> traceable correlation_id
+```
+
+### Failure handling
+
+```text
+event emission failure
+        |
+        v
+authoritative state remains consistent
+```
+
+The final transaction strategy must determine the exact expected behavior.
+
+---
+
+## 44. Production Readiness Gate
+
+Nandi runtime event emission must not be considered production-ready until:
+
+* event producers are implemented,
+* event ownership is defined,
+* event payload schemas are finalized,
+* tenant integrity is tested,
+* actor strategy is finalized,
+* correlation strategy is tested,
+* transaction and reliability semantics are defined,
+* retry behavior is defined,
+* duplicate handling is defined,
+* sensitive-data boundaries are tested,
+* consumer compatibility is considered,
+* event versioning is established.
+
+---
+
+## 45. Future Implementation Sequence
+
+The recommended sequence is:
+
+```text
+1. Approve this ADR
+          |
+          v
+2. Identify actual Nandi runtime producer
+          |
+          v
+3. Define event emission mechanism
+          |
+          v
+4. Finalize event payload schemas
+          |
+          v
+5. Define transaction / reliability semantics
+          |
+          v
+6. Implement producer
+          |
+          v
+7. Test against existing Event Platform
+          |
+          v
+8. Re-evaluate whether database changes are required
+          |
+          v
+9. Only then design Migration 075
+          |
+          v
+10. CTO review
+          |
+          v
+11. Founder approval
+          |
+          v
+12. Commit / push
+```
+
+---
+
+## 46. Final Architecture Decision
+
+**Decision:**
+
+> Nandi Runtime will integrate with the existing RaamaEsha Event Platform rather than creating a parallel event or telemetry storage system.
+
+> Runtime state tables remain authoritative.
+
+> Nandi events will represent meaningful runtime occurrences and will be produced by an explicitly defined runtime event producer.
+
+> Migration 075 is intentionally deferred until the event producer and emission architecture establish a concrete database requirement.
+
+> No new event, telemetry, or generic runtime-observability table is authorized by this ADR.
+
+---
+
+## 47. Status
+
+**Current status: PROPOSED**
+
+This document is an architectural decision record draft.
+
+It does not represent an implemented production Nandi Event Platform adapter.
+
+It does not authorize Migration 075.
+
+It should be reviewed against the actual Nandi runtime implementation before production event persistence or any database migration is created.
+
+**Owner:** RaamaEsha Technologies
+**Product:** RaamaEsha OS Founder Edition
+**Architecture:** AI-Native Business Operating System
+**Authority:** CTO / Founder Architecture Review
